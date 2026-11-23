@@ -6,8 +6,8 @@ use std::collections::HashSet;
 use windows::core::BOOL;
 use windows::Win32::Foundation::{CloseHandle, HANDLE, HWND, LPARAM, LUID, WPARAM};
 use windows::Win32::Security::{
-    AdjustTokenPrivileges, LookupPrivilegeValueW, LUID_AND_ATTRIBUTES, SE_PRIVILEGE_ENABLED, TOKEN_ADJUST_PRIVILEGES,
-    TOKEN_PRIVILEGES,
+    AdjustTokenPrivileges, LookupPrivilegeValueW, LUID_AND_ATTRIBUTES, SE_PRIVILEGE_ENABLED,
+    TOKEN_ADJUST_PRIVILEGES, TOKEN_PRIVILEGES,
 };
 use windows::Win32::System::Diagnostics::ToolHelp::{
     CreateToolhelp32Snapshot, Process32FirstW, Process32NextW, PROCESSENTRY32W, TH32CS_SNAPPROCESS,
@@ -17,20 +17,158 @@ use windows::Win32::System::Shutdown::LockWorkStation;
 use windows::Win32::System::Threading::{
     GetCurrentProcess, OpenProcess, OpenProcessToken, TerminateProcess, PROCESS_TERMINATE,
 };
+use windows::Win32::UI::Input::KeyboardAndMouse::{
+    SendInput, INPUT, INPUT_0, INPUT_KEYBOARD, KEYBDINPUT, KEYEVENTF_KEYUP, VIRTUAL_KEY, VK_D,
+    VK_LWIN, VK_MEDIA_PLAY_PAUSE, VK_VOLUME_MUTE,
+};
 use windows::Win32::UI::WindowsAndMessaging::*;
 
-/// (id, libellé, besoin d'un processus, besoin d'un bureau)
-pub const ACTIONS: &[(&str, &str, bool, bool)] = &[
-    ("lock", "Verrouiller la session", false, false),
-    ("sleep", "Mettre en veille", false, false),
-    ("switch_desktop", "Changer de bureau virtuel", false, true),
-    ("kill_app", "Fermer une application", true, false),
-    ("minimize_app", "Minimiser une application", true, false),
-    ("move_app", "Déplacer une application vers un bureau", true, true),
+/// Description d'un type d'action (pour l'éditeur visuel).
+#[derive(Clone, Copy)]
+pub struct Kind {
+    pub id: &'static str,
+    pub label: &'static str,
+    pub desc: &'static str,
+    /// Glyphe Segoe Fluent Icons
+    pub icon: char,
+    pub process: bool,
+    pub desktop: bool,
+    pub text: bool,
+    pub seconds: bool,
+}
+
+const fn k(id: &'static str, label: &'static str, desc: &'static str, icon: char) -> Kind {
+    Kind {
+        id,
+        label,
+        desc,
+        icon,
+        process: false,
+        desktop: false,
+        text: false,
+        seconds: false,
+    }
+}
+
+pub const KINDS: &[Kind] = &[
+    k(
+        "lock",
+        "Verrouiller la session",
+        "Comme Win+L, instantané",
+        '\u{E72E}',
+    ),
+    Kind {
+        desktop: true,
+        ..k(
+            "switch_desktop",
+            "Changer de bureau",
+            "Bascule vers un bureau virtuel",
+            '\u{E7C4}',
+        )
+    },
+    k(
+        "show_desktop",
+        "Afficher le bureau",
+        "Réduit toutes les fenêtres",
+        '\u{E8A9}',
+    ),
+    Kind {
+        process: true,
+        ..k(
+            "minimize_app",
+            "Minimiser une appli",
+            "Réduit les fenêtres d'une appli",
+            '\u{E921}',
+        )
+    },
+    Kind {
+        process: true,
+        ..k(
+            "kill_app",
+            "Fermer une appli",
+            "Ferme une appli ou certaines fenêtres",
+            '\u{E711}',
+        )
+    },
+    Kind {
+        process: true,
+        desktop: true,
+        ..k(
+            "move_app",
+            "Déplacer une appli",
+            "Envoie une appli sur un autre bureau",
+            '\u{E8DE}',
+        )
+    },
+    k(
+        "media_pause",
+        "Lecture / pause",
+        "Touche multimédia lecture/pause",
+        '\u{E769}',
+    ),
+    k(
+        "mute",
+        "Couper le son",
+        "Touche multimédia muet (bascule)",
+        '\u{E74F}',
+    ),
+    k(
+        "screen_off",
+        "Éteindre l'écran",
+        "Met les écrans en veille",
+        '\u{E7F4}',
+    ),
+    k("sleep", "Mettre en veille", "Veille du PC", '\u{E708}'),
+    Kind {
+        text: true,
+        ..k(
+            "notify",
+            "Notification",
+            "Affiche une notification Windows",
+            '\u{EA8F}',
+        )
+    },
+    Kind {
+        seconds: true,
+        ..k(
+            "wait",
+            "Attendre",
+            "Pause avant l'action suivante",
+            '\u{E916}',
+        )
+    },
 ];
 
-pub fn label(id: &str) -> &'static str {
-    ACTIONS.iter().find(|a| a.0 == id).map(|a| a.1).unwrap_or("Action inconnue")
+pub fn kind(id: &str) -> Kind {
+    KINDS
+        .iter()
+        .copied()
+        .find(|k| k.id == id)
+        .unwrap_or(k("?", "Action inconnue", "", '\u{E946}'))
+}
+
+/// Simule une séquence de touches (code, relâchée ?).
+fn send_keys(keys: &[(VIRTUAL_KEY, bool)]) {
+    let inputs: Vec<INPUT> = keys
+        .iter()
+        .map(|(vk, up)| INPUT {
+            r#type: INPUT_KEYBOARD,
+            Anonymous: INPUT_0 {
+                ki: KEYBDINPUT {
+                    wVk: *vk,
+                    dwFlags: if *up {
+                        KEYEVENTF_KEYUP
+                    } else {
+                        Default::default()
+                    },
+                    ..Default::default()
+                },
+            },
+        })
+        .collect();
+    unsafe {
+        SendInput(&inputs, std::mem::size_of::<INPUT>() as i32);
+    }
 }
 
 pub fn run_all(actions: &[ActionConf], log: &dyn Fn(String)) {
@@ -67,8 +205,39 @@ pub fn run(a: &ActionConf, log: &dyn Fn(String)) {
                         windows::Win32::UI::WindowsAndMessaging::SwitchToThisWindow(shell, true);
                     }
                 },
-                Err(e) => log(format!("[erreur] Changement vers le bureau {n} impossible : {e:?}")),
+                Err(e) => log(format!(
+                    "[erreur] Changement vers le bureau {n} impossible : {e:?}"
+                )),
             }
+        }
+        "show_desktop" => send_keys(&[
+            (VK_LWIN, false),
+            (VK_D, false),
+            (VK_D, true),
+            (VK_LWIN, true),
+        ]),
+        "media_pause" => send_keys(&[(VK_MEDIA_PLAY_PAUSE, false), (VK_MEDIA_PLAY_PAUSE, true)]),
+        "mute" => send_keys(&[(VK_VOLUME_MUTE, false), (VK_VOLUME_MUTE, true)]),
+        "screen_off" => unsafe {
+            // SC_MONITORPOWER, 2 = éteint. Post : ne bloque jamais.
+            let _ = PostMessageW(
+                Some(HWND_BROADCAST),
+                WM_SYSCOMMAND,
+                WPARAM(SC_MONITORPOWER as usize),
+                LPARAM(2),
+            );
+        },
+        "notify" => {
+            let text = if p.text.trim().is_empty() {
+                "Workflow déclenché"
+            } else {
+                p.text.trim()
+            };
+            crate::daemon::notify(text);
+        }
+        "wait" => {
+            let secs = p.seconds.unwrap_or(1.0).clamp(0.0, 60.0);
+            std::thread::sleep(std::time::Duration::from_secs_f64(secs));
         }
         "kill_app" | "minimize_app" | "move_app" if process.is_empty() => {
             log("[erreur] Aucun processus cible configuré".into());
@@ -85,7 +254,10 @@ pub fn run(a: &ActionConf, log: &dyn Fn(String)) {
                     let _ = ShowWindowAsync(*h, SW_MINIMIZE);
                 }
             }
-            log(format!("{} fenêtre(s) de {process} minimisée(s)", hwnds.len()));
+            log(format!(
+                "{} fenêtre(s) de {process} minimisée(s)",
+                hwnds.len()
+            ));
         }
         "move_app" => {
             let n = p.desktop.unwrap_or(2).max(1);
@@ -96,9 +268,14 @@ pub fn run(a: &ActionConf, log: &dyn Fn(String)) {
             }
             let moved = hwnds
                 .iter()
-                .filter(|h| winvd::move_window_to_desktop(n - 1, &windows58::Win32::Foundation::HWND(h.0)).is_ok())
+                .filter(|h| {
+                    winvd::move_window_to_desktop(n - 1, &windows58::Win32::Foundation::HWND(h.0))
+                        .is_ok()
+                })
                 .count();
-            log(format!("{moved} fenêtre(s) de {process} déplacée(s) vers le bureau {n}"));
+            log(format!(
+                "{moved} fenêtre(s) de {process} déplacée(s) vers le bureau {n}"
+            ));
         }
         other => log(format!("[erreur] Action inconnue : {other}")),
     }
@@ -125,7 +302,10 @@ fn kill_app(process: &str, title: &str, log: &dyn Fn(String)) {
                 let _ = PostMessageW(Some(*h), WM_CLOSE, WPARAM(0), LPARAM(0));
             }
         }
-        log(format!("{} fenêtre(s) de {process} fermée(s) (titre ~ « {title} »)", hwnds.len()));
+        log(format!(
+            "{} fenêtre(s) de {process} fermée(s) (titre ~ « {title} »)",
+            hwnds.len()
+        ));
         return;
     }
     let pids = pids_of(process);
@@ -147,26 +327,44 @@ fn kill_app(process: &str, title: &str, log: &dyn Fn(String)) {
     if killed > 0 {
         log(format!("{killed} processus {process} terminé(s)"));
     } else {
-        log(format!("[erreur] Impossible de terminer {process} (processus élevé ?)"));
+        log(format!(
+            "[erreur] Impossible de terminer {process} (processus élevé ?)"
+        ));
     }
 }
 
 /// PIDs d'un exécutable (nom insensible à la casse) via un instantané Toolhelp.
 pub fn pids_of(process: &str) -> HashSet<u32> {
     let target = process.to_lowercase();
-    processes().into_iter().filter(|(_, n)| n.to_lowercase() == target).map(|(p, _)| p).collect()
+    processes()
+        .into_iter()
+        .filter(|(_, n)| n.to_lowercase() == target)
+        .map(|(p, _)| p)
+        .collect()
 }
 
 /// (pid, nom.exe) de tous les processus.
 pub fn processes() -> Vec<(u32, String)> {
     let mut out = Vec::new();
     unsafe {
-        let Ok(snap) = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0) else { return out };
-        let mut e = PROCESSENTRY32W { dwSize: std::mem::size_of::<PROCESSENTRY32W>() as u32, ..Default::default() };
+        let Ok(snap) = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0) else {
+            return out;
+        };
+        let mut e = PROCESSENTRY32W {
+            dwSize: std::mem::size_of::<PROCESSENTRY32W>() as u32,
+            ..Default::default()
+        };
         if Process32FirstW(snap, &mut e).is_ok() {
             loop {
-                let len = e.szExeFile.iter().position(|&c| c == 0).unwrap_or(e.szExeFile.len());
-                out.push((e.th32ProcessID, String::from_utf16_lossy(&e.szExeFile[..len])));
+                let len = e
+                    .szExeFile
+                    .iter()
+                    .position(|&c| c == 0)
+                    .unwrap_or(e.szExeFile.len());
+                out.push((
+                    e.th32ProcessID,
+                    String::from_utf16_lossy(&e.szExeFile[..len]),
+                ));
                 if Process32NextW(snap, &mut e).is_err() {
                     break;
                 }
@@ -188,7 +386,9 @@ unsafe extern "system" fn enum_cb(hwnd: HWND, lp: LPARAM) -> BOOL {
     if IsWindowVisible(hwnd).as_bool() {
         let mut pid = 0u32;
         GetWindowThreadProcessId(hwnd, Some(&mut pid));
-        if ctx.pids.contains(&pid) && (ctx.needle.is_empty() || window_title(hwnd).to_lowercase().contains(&ctx.needle)) {
+        if ctx.pids.contains(&pid)
+            && (ctx.needle.is_empty() || window_title(hwnd).to_lowercase().contains(&ctx.needle))
+        {
             ctx.out.push(hwnd);
         }
     }
@@ -213,7 +413,11 @@ pub fn windows_of(process: &str, title: &str) -> Vec<HWND> {
     if pids.is_empty() {
         return Vec::new();
     }
-    let mut ctx = EnumCtx { pids, needle: title.trim().to_lowercase(), out: Vec::new() };
+    let mut ctx = EnumCtx {
+        pids,
+        needle: title.trim().to_lowercase(),
+        out: Vec::new(),
+    };
     unsafe {
         let _ = EnumWindows(Some(enum_cb), LPARAM(&mut ctx as *mut _ as isize));
     }
@@ -229,7 +433,10 @@ unsafe fn enable_shutdown_privilege() {
     if LookupPrivilegeValueW(None, windows::core::w!("SeShutdownPrivilege"), &mut luid).is_ok() {
         let tp = TOKEN_PRIVILEGES {
             PrivilegeCount: 1,
-            Privileges: [LUID_AND_ATTRIBUTES { Luid: luid, Attributes: SE_PRIVILEGE_ENABLED }],
+            Privileges: [LUID_AND_ATTRIBUTES {
+                Luid: luid,
+                Attributes: SE_PRIVILEGE_ENABLED,
+            }],
         };
         let _ = AdjustTokenPrivileges(token, false, Some(&tp), 0, None, None);
     }
