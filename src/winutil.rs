@@ -29,7 +29,12 @@ fn exe_path(pid: u32) -> Option<String> {
         let h = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid).ok()?;
         let mut buf = [0u16; 1024];
         let mut len = buf.len() as u32;
-        let ok = QueryFullProcessImageNameW(h, PROCESS_NAME_WIN32, windows::core::PWSTR(buf.as_mut_ptr()), &mut len);
+        let ok = QueryFullProcessImageNameW(
+            h,
+            PROCESS_NAME_WIN32,
+            windows::core::PWSTR(buf.as_mut_ptr()),
+            &mut len,
+        );
         let _ = CloseHandle(h);
         ok.ok()?;
         Some(String::from_utf16_lossy(&buf[..len as usize]))
@@ -46,13 +51,18 @@ pub fn list_processes() -> Vec<ProcEntry> {
         if pid == 0 || !name.to_lowercase().ends_with(".exe") {
             continue;
         }
-        let entry = seen.entry(name.to_lowercase()).or_insert_with(|| (name.clone(), None));
+        let entry = seen
+            .entry(name.to_lowercase())
+            .or_insert_with(|| (name.clone(), None));
         if entry.1.is_none() {
             entry.1 = exe_path(pid);
         }
     }
     seen.into_values()
-        .map(|(name, path)| ProcEntry { icon: path.and_then(|p| file_icon(&p)), name })
+        .map(|(name, path)| ProcEntry {
+            icon: path.and_then(|p| file_icon(&p)),
+            name,
+        })
         .collect()
 }
 
@@ -95,7 +105,17 @@ unsafe fn hicon_rgba(icon: HICON) -> Option<Vec<u8>> {
     let mut out = None;
     if let Ok(bmp) = CreateDIBSection(Some(mem), &bmi, DIB_RGB_COLORS, &mut bits, None, 0) {
         let old = SelectObject(mem, bmp.into());
-        let _ = DrawIconEx(mem, 0, 0, icon, ICON as i32, ICON as i32, 0, None, DI_NORMAL);
+        let _ = DrawIconEx(
+            mem,
+            0,
+            0,
+            icon,
+            ICON as i32,
+            ICON as i32,
+            0,
+            None,
+            DI_NORMAL,
+        );
         let _ = GdiFlush();
         let src = std::slice::from_raw_parts(bits as *const u8, ICON * ICON * 4);
         let no_alpha = src.chunks_exact(4).all(|p| p[3] == 0);
@@ -146,13 +166,17 @@ unsafe extern "system" fn ll_proc(code: i32, wp: WPARAM, lp: LPARAM) -> LRESULT 
 pub fn record_combo() -> String {
     PRESSED.with(|p| *p.borrow_mut() = (Vec::new(), None));
     unsafe {
-        let Ok(hook) = SetWindowsHookExW(WH_KEYBOARD_LL, Some(ll_proc), None, 0) else { return String::new() };
+        let Ok(hook) = SetWindowsHookExW(WH_KEYBOARD_LL, Some(ll_proc), None, 0) else {
+            return String::new();
+        };
         let start = Instant::now();
         let timer = SetTimer(None, 0, 30, None);
         let mut msg = MSG::default();
         while GetMessageW(&mut msg, None, 0, 0).as_bool() {
             let first = PRESSED.with(|p| p.borrow().1);
-            if first.is_some_and(|t| t.elapsed() >= CAPTURE_WINDOW) || start.elapsed() >= CAPTURE_TIMEOUT {
+            if first.is_some_and(|t| t.elapsed() >= CAPTURE_WINDOW)
+                || start.elapsed() >= CAPTURE_TIMEOUT
+            {
                 break;
             }
             DispatchMessageW(&msg);
@@ -201,7 +225,9 @@ pub fn autostart_enabled() -> bool {
         }
         let len = (size as usize / 2).saturating_sub(1);
         let value = String::from_utf16_lossy(&buf[..len]).to_lowercase();
-        let exe = std::env::current_exe().map(|p| p.display().to_string().to_lowercase()).unwrap_or_default();
+        let exe = std::env::current_exe()
+            .map(|p| p.display().to_string().to_lowercase())
+            .unwrap_or_default();
         !exe.is_empty() && value.contains(&exe)
     }
 }
@@ -209,11 +235,14 @@ pub fn autostart_enabled() -> bool {
 pub fn set_autostart(on: bool) -> bool {
     unsafe {
         let mut key = HKEY::default();
-        if RegOpenKeyExW(HKEY_CURRENT_USER, RUN_KEY, None, KEY_SET_VALUE, &mut key) != ERROR_SUCCESS {
+        if RegOpenKeyExW(HKEY_CURRENT_USER, RUN_KEY, None, KEY_SET_VALUE, &mut key) != ERROR_SUCCESS
+        {
             return false;
         }
         let ok = if on {
-            let exe = std::env::current_exe().map(|p| p.display().to_string()).unwrap_or_default();
+            let exe = std::env::current_exe()
+                .map(|p| p.display().to_string())
+                .unwrap_or_default();
             let val: Vec<u16> = format!("\"{exe}\"").encode_utf16().chain(Some(0)).collect();
             let bytes = std::slice::from_raw_parts(val.as_ptr() as *const u8, val.len() * 2);
             RegSetValueExW(key, RUN_VALUE, None, REG_SZ, Some(bytes)) == ERROR_SUCCESS

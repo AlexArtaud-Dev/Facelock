@@ -28,7 +28,10 @@ fn main() {
             let t = std::time::Instant::now();
             let emb = e.embed(&f, face).unwrap();
             let te = t.elapsed();
-            eprintln!("{path}: det {td:?} emb {te:?} box {:?} score {:.3}", face.bbox, face.score);
+            eprintln!(
+                "{path}: det {td:?} emb {te:?} box {:?} score {:.3}",
+                face.bbox, face.score
+            );
             out.push(serde_json::json!({"path": path, "bbox": face.bbox, "lm": face.landmarks, "score": face.score, "emb": emb.to_vec()}));
         }
     }

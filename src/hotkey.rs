@@ -60,7 +60,9 @@ fn modifier_of(name: &str) -> Option<u32> {
         "ctrl" | "control" | "left ctrl" | "right ctrl" => MOD_CONTROL,
         "alt" | "left alt" | "right alt" | "alt gr" => MOD_ALT,
         "shift" | "left shift" | "right shift" => MOD_SHIFT,
-        "windows" | "win" | "left windows" | "right windows" | "cmd" | "command" | "super" => MOD_WIN,
+        "windows" | "win" | "left windows" | "right windows" | "cmd" | "command" | "super" => {
+            MOD_WIN
+        }
         _ => return None,
     })
 }
@@ -124,7 +126,11 @@ pub fn parse_combo(combo: &str) -> Result<(u32, u32), String> {
     let mut mods = 0;
     let mut key = None;
     // "num plus" est le seul nom de touche contenant "+", on découpe proprement.
-    for part in combo.split('+').map(|p| p.trim().to_lowercase()).filter(|p| !p.is_empty()) {
+    for part in combo
+        .split('+')
+        .map(|p| p.trim().to_lowercase())
+        .filter(|p| !p.is_empty())
+    {
         if let Some(m) = modifier_of(&part) {
             mods |= m;
         } else if key.is_some() {
@@ -140,10 +146,18 @@ pub fn parse_combo(combo: &str) -> Result<(u32, u32), String> {
 /// Forme canonique d'une combinaison : modificateurs ordonnés puis touche.
 pub fn format_combo(mods: u32, vk: u32) -> String {
     let mut parts: Vec<String> = Vec::new();
-    if mods & MOD_CONTROL != 0 { parts.push("ctrl".into()); }
-    if mods & MOD_ALT != 0 { parts.push("alt".into()); }
-    if mods & MOD_SHIFT != 0 { parts.push("shift".into()); }
-    if mods & MOD_WIN != 0 { parts.push("windows".into()); }
+    if mods & MOD_CONTROL != 0 {
+        parts.push("ctrl".into());
+    }
+    if mods & MOD_ALT != 0 {
+        parts.push("alt".into());
+    }
+    if mods & MOD_SHIFT != 0 {
+        parts.push("shift".into());
+    }
+    if mods & MOD_WIN != 0 {
+        parts.push("windows".into());
+    }
     parts.push(vk_name(vk));
     parts.join("+")
 }
@@ -169,8 +183,14 @@ mod tests {
     use super::*;
     #[test]
     fn roundtrip() {
-        assert_eq!(parse_combo("alt+ctrl+p").unwrap(), (MOD_ALT | MOD_CONTROL, 0x50));
-        assert_eq!(parse_combo("ctrl+shift+f12").unwrap(), (MOD_CONTROL | MOD_SHIFT, 0x7B));
+        assert_eq!(
+            parse_combo("alt+ctrl+p").unwrap(),
+            (MOD_ALT | MOD_CONTROL, 0x50)
+        );
+        assert_eq!(
+            parse_combo("ctrl+shift+f12").unwrap(),
+            (MOD_CONTROL | MOD_SHIFT, 0x7B)
+        );
         assert_eq!(format_combo(MOD_CONTROL | MOD_ALT, 0x57), "ctrl+alt+w");
         assert!(parse_combo("a+b").is_err());
         assert!(parse_combo("ctrl").is_err());

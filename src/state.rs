@@ -60,7 +60,10 @@ impl Shared {
             locked: AtomicBool::new(false),
             hotkeys_paused: AtomicBool::new(false),
             profiles: AtomicU64::new(0),
-            logs: Mutex::new(Logs { lines: VecDeque::new(), next: 0 }),
+            logs: Mutex::new(Logs {
+                lines: VecDeque::new(),
+                next: 0,
+            }),
             frame: Mutex::new(None),
             frame_wanted: Mutex::new(None),
             enroll: Mutex::new(None),
@@ -93,7 +96,10 @@ impl Shared {
     }
 
     pub fn frame_wanted(&self) -> bool {
-        self.frame_wanted.lock().unwrap().is_some_and(|t| t.elapsed().as_secs_f32() < 2.0)
+        self.frame_wanted
+            .lock()
+            .unwrap()
+            .is_some_and(|t| t.elapsed().as_secs_f32() < 2.0)
     }
 
     pub fn cfg(&self) -> Config {
@@ -102,7 +108,11 @@ impl Shared {
 
     pub fn set_suspended(&self, s: bool) {
         self.suspended.store(s, Ordering::SeqCst);
-        self.log(if s { "Surveillance suspendue" } else { "Surveillance reprise" });
+        self.log(if s {
+            "Surveillance suspendue"
+        } else {
+            "Surveillance reprise"
+        });
         self.send(MonCmd::Wake);
         crate::daemon::post_refresh(self);
     }
