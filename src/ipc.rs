@@ -23,13 +23,20 @@ pub enum Cmd {
     EnrollCancel,
     PauseHotkeys { paused: bool },
     OpenUi { page: String },
+    RunWorkflow { id: u64 },
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 #[serde(tag = "t")]
 pub enum Req {
-    Poll { log_since: u64, want_frame: bool, frame_seq: u64 },
-    Cmd { cmd: Cmd },
+    Poll {
+        log_since: u64,
+        want_frame: bool,
+        frame_seq: u64,
+    },
+    Cmd {
+        cmd: Cmd,
+    },
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, Default)]
@@ -107,7 +114,11 @@ pub fn read_msg<R: Read, T: for<'de> Deserialize<'de>>(r: &mut R) -> std::io::Re
 
 /// Connexion cliente au daemon (None s'il ne tourne pas).
 pub fn connect() -> Option<std::fs::File> {
-    std::fs::OpenOptions::new().read(true).write(true).open(pipe_name()).ok()
+    std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(pipe_name())
+        .ok()
 }
 
 /// Envoi ponctuel d'une commande (utilisé par une 2e instance).

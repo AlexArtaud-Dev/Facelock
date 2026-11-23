@@ -17,10 +17,16 @@ use windows::Win32::Graphics::Gdi::*;
 use windows::Win32::Storage::FileSystem::PIPE_ACCESS_DUPLEX;
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::System::Pipes::*;
-use windows::Win32::System::RemoteDesktop::{WTSRegisterSessionNotification, NOTIFY_FOR_THIS_SESSION};
-use windows::Win32::System::StationsAndDesktops::{CloseDesktop, OpenInputDesktop, DESKTOP_CONTROL_FLAGS, DESKTOP_READOBJECTS};
+use windows::Win32::System::RemoteDesktop::{
+    WTSRegisterSessionNotification, NOTIFY_FOR_THIS_SESSION,
+};
+use windows::Win32::System::StationsAndDesktops::{
+    CloseDesktop, OpenInputDesktop, DESKTOP_CONTROL_FLAGS, DESKTOP_READOBJECTS,
+};
 use windows::Win32::System::Threading::CreateMutexW;
-use windows::Win32::UI::Input::KeyboardAndMouse::{RegisterHotKey, UnregisterHotKey, HOT_KEY_MODIFIERS, MOD_NOREPEAT};
+use windows::Win32::UI::Input::KeyboardAndMouse::{
+    RegisterHotKey, UnregisterHotKey, HOT_KEY_MODIFIERS, MOD_NOREPEAT,
+};
 use windows::Win32::UI::Shell::*;
 use windows::Win32::UI::WindowsAndMessaging::*;
 
@@ -36,11 +42,11 @@ const ID_QUIT: u32 = 9;
 
 const HK_TOGGLE: i32 = 1;
 const HK_RESET: i32 = 2;
-const HK_PANIC: i32 = 3;
+const HK_WORKFLOW: i32 = 100;
 
 static SHARED: OnceLock<Arc<Shared>> = OnceLock::new();
 static UI_CHILD: Mutex<Option<Child>> = Mutex::new(None);
-static APPLIED_HOTKEYS: Mutex<Vec<(i32, String)>> = Mutex::new(Vec::new());
+static APPLIED_HOTKEYS: Mutex<Vec<HotkeySpec>> = Mutex::new(Vec::new());
 static TASKBAR_CREATED: OnceLock<u32> = OnceLock::new();
 
 fn sh() -> &'static Arc<Shared> {
@@ -74,7 +80,9 @@ pub fn run() {
         if GetLastError() == ERROR_ALREADY_EXISTS {
             // Déjà lancé : on ouvre simplement la fenêtre de l'instance existante.
             let _ = AllowSetForegroundWindow(ASFW_ANY);
-            ipc::send_once(Cmd::OpenUi { page: "live".into() });
+            ipc::send_once(Cmd::OpenUi {
+                page: "live".into(),
+            });
             return;
         }
     }
@@ -92,12 +100,20 @@ pub fn run() {
         .spawn(move || crate::monitor::run(mon_sh, rx))
         .expect("thread moniteur");
     let ipc_sh = shared.clone();
-    std::thread::Builder::new().name("ipc".into()).spawn(move || ipc_server(ipc_sh)).expect("thread ipc");
+    std::thread::Builder::new()
+        .name("ipc".into())
+        .spawn(move || ipc_server(ipc_sh))
+        .expect("thread ipc");
 
     unsafe {
         let hinst = GetModuleHandleW(None).unwrap_or_default();
         let class = w!("FaceLockTray");
-        let wc = WNDCLASSW { lpfnWndProc: Some(wndproc), hInstance: hinst.into(), lpszClassName: class, ..Default::default() };
+        let wc = WNDCLASSW {
+            lpfnWndProc: Some(wndproc),
+            hInstance: hinst.into(),
+            lpszClassName: class,
+            ..Default::default()
+        };
         RegisterClassW(&wc);
         let _ = TASKBAR_CREATED.set(RegisterWindowMessageW(w!("TaskbarCreated")));
         let hwnd = CreateWindowExW(
@@ -150,9 +166,9 @@ fn session_locked() -> bool {
 
 // ------------------------------------------------------------------ tray
 
-unsafe fn make_hicon(color: [u8; 3]) -> HICON {
+unsafe fn make_hicon(variant: crate::icon::Variant) -> HICON {
     let size = GetSystemMetrics(SM_CXSMICON).max(16) as usize;
-    let rgba = crate::icon::rgba(size, color);
+    let rgba = crate::icon::rgba(size, variant);
     let bmi = BITMAPINFO {
         bmiHeader: BITMAPINFOHEADER {
             biSize: std::mem::size_of::<BITMAPINFOHEADER>() as u32,
@@ -174,7 +190,12 @@ unsafe fn make_hicon(color: [u8; 3]) -> HICON {
         d.copy_from_slice(&[s[2], s[1], s[0], s[3]]);
     }
     let mask = CreateBitmap(size as i32, size as i32, 1, 1, None);
-    let info = ICONINFO { fIcon: true.into(), hbmMask: mask, hbmColor: color_bmp, ..Default::default() };
+    let info = ICONINFO {
+        fIcon: true.into(),
+        hbmMask: mask,
+        hbmColor: color_bmp,
+        ..Default::default()
+    };
     let icon = CreateIconIndirect(&info).unwrap_or_default();
     let _ = DeleteObject(color_bmp.into());
     let _ = DeleteObject(mask.into());
@@ -207,7 +228,11 @@ static CURRENT_ICON: Mutex<isize> = Mutex::new(0);
 unsafe fn tray_update(hwnd: HWND, add: bool) {
     let s = sh();
     let suspended = s.suspended.load(Ordering::SeqCst);
-    let icon = make_hicon(if suspended { crate::icon::SUSPENDED } else { crate::icon::ACTIVE });
+    let icon = make_hicon(if suspended {
+        crate::icon::Variant::Suspended
+    } else {
+        crate::icon::Variant::Active
+    });
     let mut d = nid(hwnd);
     d.uFlags = NIF_MESSAGE | NIF_ICON | NIF_TIP;
     d.uCallbackMessage = WM_TRAY;
@@ -237,7 +262,7 @@ unsafe fn tray_remove(hwnd: HWND) {
 }
 
 /// Notification Windows (bulle / toast) via l'icône de notification.
-fn notify(message: &str) {
+pub fn notify(message: &str) {
     let Some(hwnd) = hwnd_of(sh()) else { return };
     let mut d = nid(hwnd);
     d.uFlags = NIF_INFO;
@@ -258,16 +283,33 @@ unsafe fn show_menu(hwnd: HWND) {
         menu,
         MF_STRING,
         ID_SUSPEND as usize,
-        if suspended { w!("Reprendre") } else { w!("Suspendre") },
+        if suspended {
+            w!("Reprendre")
+        } else {
+            w!("Suspendre")
+        },
     );
-    let _ = AppendMenuW(menu, MF_STRING, ID_RESET as usize, w!("Réinitialiser la vérification"));
+    let _ = AppendMenuW(
+        menu,
+        MF_STRING,
+        ID_RESET as usize,
+        w!("Réinitialiser la vérification"),
+    );
     let _ = AppendMenuW(menu, MF_SEPARATOR, 0, PCWSTR::null());
     let _ = AppendMenuW(menu, MF_STRING, ID_QUIT as usize, w!("Quitter"));
     let _ = SetMenuDefaultItem(menu, ID_LIVE, 0);
     let mut pt = POINT::default();
     let _ = GetCursorPos(&mut pt);
     let _ = SetForegroundWindow(hwnd);
-    let cmd = TrackPopupMenu(menu, TPM_RETURNCMD | TPM_RIGHTBUTTON | TPM_BOTTOMALIGN, pt.x, pt.y, None, hwnd, None);
+    let cmd = TrackPopupMenu(
+        menu,
+        TPM_RETURNCMD | TPM_RIGHTBUTTON | TPM_BOTTOMALIGN,
+        pt.x,
+        pt.y,
+        None,
+        hwnd,
+        None,
+    );
     let _ = PostMessageW(Some(hwnd), WM_NULL, WPARAM(0), LPARAM(0));
     let _ = DestroyMenu(menu);
     match cmd.0 as u32 {
@@ -284,78 +326,106 @@ unsafe fn show_menu(hwnd: HWND) {
 
 // --------------------------------------------------------------- hotkeys
 
+/// (id RegisterHotKey, combo, libellé, id du workflow éventuel)
+type HotkeySpec = (i32, String, String, Option<u64>);
+
 fn apply_hotkeys(hwnd: HWND, force: bool) {
     let s = sh();
     let cfg = s.cfg();
-    let wanted: Vec<(i32, String)> = if s.hotkeys_paused.load(Ordering::SeqCst) {
-        Vec::new()
-    } else {
-        vec![
-            (HK_TOGGLE, cfg.hotkeys.toggle.clone()),
-            (HK_RESET, cfg.hotkeys.reset.clone()),
-            (HK_PANIC, if cfg.panic.enabled { cfg.panic.hotkey.clone() } else { String::new() }),
-        ]
-    };
+    let mut wanted: Vec<HotkeySpec> = Vec::new();
+    if !s.hotkeys_paused.load(Ordering::SeqCst) {
+        wanted.push((
+            HK_TOGGLE,
+            cfg.hotkeys.toggle.clone(),
+            "démarrer/suspendre".into(),
+            None,
+        ));
+        wanted.push((
+            HK_RESET,
+            cfg.hotkeys.reset.clone(),
+            "réinitialiser".into(),
+            None,
+        ));
+        for (i, wf) in cfg.workflows.iter().enumerate().filter(|(_, w)| w.enabled) {
+            if let crate::config::Trigger::Hotkey { combo } = &wf.trigger {
+                wanted.push((
+                    HK_WORKFLOW + i as i32,
+                    combo.clone(),
+                    format!("« {} »", wf.name),
+                    Some(wf.id),
+                ));
+            }
+        }
+    }
+    wanted.retain(|w| !w.1.trim().is_empty());
     let mut applied = APPLIED_HOTKEYS.lock().unwrap();
     if !force && *applied == wanted {
         return;
     }
-    let paused_change = wanted.is_empty() || applied.is_empty();
+    // Pause / reprise pendant l'enregistrement d'un raccourci : pas de bruit.
+    let quiet = !force && (wanted.is_empty() || applied.is_empty());
     unsafe {
-        for id in [HK_TOGGLE, HK_RESET, HK_PANIC] {
-            let _ = UnregisterHotKey(Some(hwnd), id);
+        for (id, ..) in applied.iter() {
+            let _ = UnregisterHotKey(Some(hwnd), *id);
         }
-        for (id, combo) in &wanted {
-            if combo.trim().is_empty() {
-                continue;
-            }
-            let name = match *id {
-                HK_TOGGLE => "démarrer/suspendre",
-                HK_RESET => "réinitialiser",
-                _ => "panic",
-            };
+        let mut ok = Vec::new();
+        for spec in &wanted {
+            let (id, combo, name, _) = spec;
             match hotkey::parse_combo(combo) {
                 Ok((mods, vk)) => {
-                    if RegisterHotKey(Some(hwnd), *id, HOT_KEY_MODIFIERS(mods) | MOD_NOREPEAT, vk).is_ok() {
-                        if !paused_change || force {
-                            s.log(format!("Raccourci global actif : {} ({name})", hotkey::pretty(combo)));
+                    if RegisterHotKey(Some(hwnd), *id, HOT_KEY_MODIFIERS(mods) | MOD_NOREPEAT, vk)
+                        .is_ok()
+                    {
+                        ok.push(spec.clone());
+                        let was = applied.iter().any(|a| a.1 == *combo && a.2 == *name);
+                        if !quiet && !was {
+                            s.log(format!(
+                                "Raccourci actif : {} → {name}",
+                                hotkey::pretty(combo)
+                            ));
                         }
                     } else {
-                        s.log(format!("[erreur] Raccourci « {} » déjà utilisé par une autre application", hotkey::pretty(combo)));
+                        s.log(format!("[erreur] Raccourci {} déjà utilisé (ailleurs ou par un autre workflow)", hotkey::pretty(combo)));
                     }
                 }
                 Err(e) => s.log(format!("[erreur] Raccourci « {combo} » invalide : {e}")),
             }
         }
+        *applied = ok;
     }
-    *applied = wanted;
 }
 
 fn on_hotkey(id: i32) {
     let s = sh();
     let cfg = s.cfg();
+    if id >= HK_WORKFLOW {
+        let wf_id = APPLIED_HOTKEYS
+            .lock()
+            .unwrap()
+            .iter()
+            .find(|a| a.0 == id)
+            .and_then(|a| a.3);
+        if let Some(wf) = wf_id.and_then(|w| cfg.workflows.iter().find(|x| x.id == w)) {
+            crate::monitor::run_workflow(s, wf, Some("raccourci"));
+        }
+        return;
+    }
     match id {
         HK_TOGGLE => {
             let now = !s.suspended.load(Ordering::SeqCst);
             s.set_suspended(now);
             if cfg.notifications.toggle {
-                notify(if now { "Surveillance suspendue" } else { "Surveillance reprise" });
+                notify(if now {
+                    "Surveillance suspendue"
+                } else {
+                    "Surveillance reprise"
+                });
             }
         }
         HK_RESET => {
             s.send(MonCmd::Reset);
             if cfg.notifications.reset {
                 notify("Vérification réinitialisée — le check reprend de zéro");
-            }
-        }
-        HK_PANIC => {
-            // Latence critique : les actions partent avant toute journalisation.
-            let actions = cfg.panic.actions.clone();
-            let s2 = s.clone();
-            std::thread::spawn(move || crate::actions::run_all(&actions, &|m| s2.log(m)));
-            s.log("PANIC — exécution immédiate des actions");
-            if cfg.notifications.panic {
-                notify("Panic button déclenché !");
             }
         }
         _ => {}
@@ -440,14 +510,18 @@ fn open_ui(page: &str) {
             return;
         }
     }
-    match std::env::current_exe().and_then(|exe| std::process::Command::new(exe).args(["--ui", page]).spawn()) {
+    match std::env::current_exe()
+        .and_then(|exe| std::process::Command::new(exe).args(["--ui", page]).spawn())
+    {
         Ok(c) => {
             unsafe {
                 let _ = AllowSetForegroundWindow(c.id());
             }
             *child = Some(c);
         }
-        Err(e) => s.log(format!("[erreur] Ouverture de l'interface impossible : {e}")),
+        Err(e) => s.log(format!(
+            "[erreur] Ouverture de l'interface impossible : {e}"
+        )),
     }
 }
 
@@ -472,7 +546,8 @@ fn ipc_server(s: Arc<Shared>) {
             std::thread::sleep(Duration::from_secs(1));
             continue;
         }
-        let connected = unsafe { ConnectNamedPipe(h, None) }.is_ok() || unsafe { GetLastError() } == ERROR_PIPE_CONNECTED;
+        let connected = unsafe { ConnectNamedPipe(h, None) }.is_ok()
+            || unsafe { GetLastError() } == ERROR_PIPE_CONNECTED;
         if !connected {
             unsafe {
                 let _ = CloseHandle(h);
@@ -481,14 +556,20 @@ fn ipc_server(s: Arc<Shared>) {
         }
         let file = unsafe { std::fs::File::from_raw_handle(h.0 as _) };
         let s2 = s.clone();
-        let _ = std::thread::Builder::new().name("ipc-client".into()).spawn(move || client(s2, file));
+        let _ = std::thread::Builder::new()
+            .name("ipc-client".into())
+            .spawn(move || client(s2, file));
     }
 }
 
 fn client(s: Arc<Shared>, mut f: std::fs::File) {
     while let Ok((req, _)) = ipc::read_msg::<_, Req>(&mut f) {
         let res = match req {
-            Req::Poll { log_since, want_frame, frame_seq } => {
+            Req::Poll {
+                log_since,
+                want_frame,
+                frame_seq,
+            } => {
                 let mut bin = Arc::new(Vec::new());
                 let mut meta = None;
                 if want_frame {
@@ -500,7 +581,12 @@ fn client(s: Arc<Shared>, mut f: std::fs::File) {
                     if let Some(p) = s.frame.lock().unwrap().as_ref() {
                         if p.seq != frame_seq {
                             bin = p.bgra.clone();
-                            meta = Some(FrameMeta { seq: p.seq, w: p.w, h: p.h, faces: p.faces.clone() });
+                            meta = Some(FrameMeta {
+                                seq: p.seq,
+                                w: p.w,
+                                h: p.h,
+                                faces: p.faces.clone(),
+                            });
                         }
                     }
                 }
@@ -516,11 +602,27 @@ fn client(s: Arc<Shared>, mut f: std::fs::File) {
                     frame: meta,
                     nav: s.nav.lock().unwrap().take(),
                 };
-                ipc::write_msg(&mut f, &Reply { ok: true, msg: None, status: Some(status) }, &bin)
+                ipc::write_msg(
+                    &mut f,
+                    &Reply {
+                        ok: true,
+                        msg: None,
+                        status: Some(status),
+                    },
+                    &bin,
+                )
             }
             Req::Cmd { cmd } => {
                 let (ok, msg) = handle_cmd(&s, cmd);
-                ipc::write_msg(&mut f, &Reply { ok, msg, status: None }, &[])
+                ipc::write_msg(
+                    &mut f,
+                    &Reply {
+                        ok,
+                        msg,
+                        status: None,
+                    },
+                    &[],
+                )
             }
         };
         if res.is_err() {
@@ -556,6 +658,18 @@ fn handle_cmd(s: &Arc<Shared>, cmd: Cmd) -> (bool, Option<String>) {
             post_hotkeys(s);
         }
         Cmd::OpenUi { page } => open_ui(&page),
+        Cmd::RunWorkflow { id } => {
+            let cfg = s.cfg();
+            match cfg.workflows.iter().find(|w| w.id == id) {
+                Some(wf) => crate::monitor::run_workflow(s, wf, Some("test")),
+                None => {
+                    return (
+                        false,
+                        Some("Workflow introuvable (enregistrement en cours ?)".into()),
+                    )
+                }
+            }
+        }
     }
     (true, None)
 }

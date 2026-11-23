@@ -7,9 +7,11 @@
 
 use crate::actions;
 use crate::camera::{self, Camera};
+use crate::config::{Config, StrangerWhen, Trigger, Workflow};
 use crate::engine::{box_iou, Engine, Face, Frame, EMB};
 use crate::ipc::{EnrollInfo, FaceBox};
 use crate::state::{MonCmd, Published, Shared};
+use std::collections::HashMap;
 use std::sync::atomic::Ordering;
 use std::sync::mpsc::{Receiver, RecvTimeoutError};
 use std::sync::Arc;
@@ -30,12 +32,31 @@ struct Tracked {
     at: Instant,
 }
 
+/// État d'exécution d'un workflow (indexé par son id).
 #[derive(Default)]
+struct WfState {
+    since: Option<Instant>,
+    fired: bool,
+    last_fire: Option<Instant>,
+}
+
 struct Triggers {
-    absent_since: Option<Instant>,
-    absence_fired: bool,
-    stranger_since: Option<Instant>,
-    last_stranger_fire: Option<Instant>,
+    wf: HashMap<u64, WfState>,
+    /// Un visage autorisé était-il là à la vérification précédente ?
+    me_present: bool,
+    absent_start: Option<Instant>,
+}
+
+impl Default for Triggers {
+    fn default() -> Self {
+        // Au démarrage / déverrouillage, l'utilisateur est supposé présent :
+        // pas de faux « retour ».
+        Triggers {
+            wf: HashMap::new(),
+            me_present: true,
+            absent_start: None,
+        }
+    }
 }
 
 struct Enroll {
@@ -56,6 +77,36 @@ struct Mon {
     cam_error_logged: bool,
 }
 
+/// Exécute les actions d'un workflow dans un thread dédié (une action
+/// « Attendre » ne bloque ni la surveillance ni les raccourcis).
+pub fn run_workflow(sh: &Arc<Shared>, wf: &Workflow, origin: Option<&str>) {
+    let sh = sh.clone();
+    let wf = wf.clone();
+    let origin = origin.map(str::to_string);
+    std::thread::spawn(move || {
+        // Raccourci : les actions partent avant toute journalisation.
+        if origin.is_some() {
+            actions::run_all(&wf.actions, &|m| sh.log(m));
+        }
+        sh.log(format!(
+            "▶ « {} »{}",
+            wf.name,
+            origin
+                .as_deref()
+                .map(|o| format!(" ({o})"))
+                .unwrap_or_default()
+        ));
+        if origin.is_none() {
+            if wf.actions.is_empty() {
+                sh.log("Aucune action configurée");
+            }
+            for a in &wf.actions {
+                actions::run(a, &|m| sh.log(m));
+            }
+        }
+    });
+}
+
 pub fn run(sh: Arc<Shared>, rx: Receiver<MonCmd>) {
     camera::init_thread();
     let engine = match Engine::new() {
@@ -65,7 +116,8 @@ pub fn run(sh: Arc<Shared>, rx: Receiver<MonCmd>) {
             return;
         }
     };
-    sh.profiles.store(engine.profiles.len() as u64, Ordering::Relaxed);
+    sh.profiles
+        .store(engine.profiles.len() as u64, Ordering::Relaxed);
     // Les pages du modèle embarqué lues au chargement ne servent plus :
     // on les rend au système (working set réduit de ~40 Mo).
     unsafe {
@@ -112,7 +164,8 @@ impl Mon {
                 self.trig = Triggers::default();
                 self.tracked.clear();
                 self.sh.suspended.store(false, Ordering::SeqCst);
-                self.sh.log("Réinitialisation — la vérification reprend de zéro");
+                self.sh
+                    .log("Réinitialisation — la vérification reprend de zéro");
                 crate::daemon::post_refresh(&self.sh);
             }
             MonCmd::ReloadProfiles => {
@@ -123,7 +176,10 @@ impl Mon {
                 self.sh.log(format!("{n} profil(s) chargé(s)"));
             }
             MonCmd::EnrollStart => {
-                self.enroll = Some(Enroll { embeddings: Vec::new(), current: None });
+                self.enroll = Some(Enroll {
+                    embeddings: Vec::new(),
+                    current: None,
+                });
                 *self.sh.enroll.lock().unwrap() = Some(EnrollInfo::default());
                 *self.sh.frame_wanted.lock().unwrap() = Some(Instant::now());
                 self.sh.log("Enrôlement démarré (surveillance en pause)");
@@ -145,14 +201,20 @@ impl Mon {
                 let name = name.trim().to_string();
                 let res = match &self.enroll {
                     None => Err("Aucun enrôlement en cours".to_string()),
-                    Some(_) if !crate::engine::valid_profile_name(&name) => {
-                        Err("Nom invalide : lettres, chiffres, espaces, tirets ; 32 caractères max.".into())
-                    }
+                    Some(_) if !crate::engine::valid_profile_name(&name) => Err(
+                        "Nom invalide : lettres, chiffres, espaces, tirets ; 32 caractères max."
+                            .into(),
+                    ),
                     Some(en) if en.embeddings.len() < MIN_SAMPLES => {
                         Err(format!("Au moins {MIN_SAMPLES} captures nécessaires"))
                     }
                     Some(en) => crate::engine::write_profile(&name, &en.embeddings)
-                        .map(|_| format!("Profil « {name} » enregistré ({} empreintes)", en.embeddings.len()))
+                        .map(|_| {
+                            format!(
+                                "Profil « {name} » enregistré ({} empreintes)",
+                                en.embeddings.len()
+                            )
+                        })
                         .map_err(|e| format!("Écriture impossible : {e}")),
                 };
                 if let Ok(msg) = &res {
@@ -188,10 +250,14 @@ impl Mon {
         self.last_read = None;
     }
 
+    /// Annule les décomptes (verrouillage, suspension) en gardant l'anti-répétition.
     fn reset_absence(&mut self) {
-        self.trig.absent_since = None;
-        self.trig.absence_fired = false;
-        self.trig.stranger_since = None;
+        for st in self.trig.wf.values_mut() {
+            st.since = None;
+            st.fired = false;
+        }
+        self.trig.me_present = true;
+        self.trig.absent_start = None;
         self.tracked.clear();
     }
 
@@ -213,7 +279,10 @@ impl Mon {
                         break;
                     }
                 }
-                self.sh.log(format!("Caméra « {} » active ({}x{}) — surveillance en cours", cam.name, cam.w, cam.h));
+                self.sh.log(format!(
+                    "Caméra « {} » active ({}x{}) — surveillance en cours",
+                    cam.name, cam.w, cam.h
+                ));
                 self.cam = Some(cam);
                 self.cam_key = key;
                 self.cam_error_logged = false;
@@ -224,7 +293,10 @@ impl Mon {
             }
             Err(e) => {
                 if !self.cam_error_logged {
-                    self.sh.log(format!("Caméra indisponible ({}), nouvel essai toutes les 10 s", e.message()));
+                    self.sh.log(format!(
+                        "Caméra indisponible ({}), nouvel essai toutes les 10 s",
+                        e.message()
+                    ));
                     self.cam_error_logged = true;
                 }
                 false
@@ -233,7 +305,9 @@ impl Mon {
     }
 
     fn grab(&mut self) -> Option<Frame> {
-        let fresh = self.last_read.is_none_or(|t| t.elapsed() > Duration::from_millis(150));
+        let fresh = self
+            .last_read
+            .is_none_or(|t| t.elapsed() > Duration::from_millis(150));
         let res = self.cam.as_mut()?.read(fresh);
         self.last_read = Some(Instant::now());
         match res {
@@ -250,7 +324,13 @@ impl Mon {
         let mut slot = self.sh.frame.lock().unwrap();
         if self.sh.frame_wanted() {
             self.seq += 1;
-            *slot = Some(Published { seq: self.seq, w: frame.w, h: frame.h, bgra: Arc::new(frame.bgra), faces });
+            *slot = Some(Published {
+                seq: self.seq,
+                w: frame.w,
+                h: frame.h,
+                bgra: Arc::new(frame.bgra),
+                faces,
+            });
         } else {
             *slot = None;
         }
@@ -279,7 +359,9 @@ impl Mon {
         if !self.ensure_camera() {
             return Duration::from_secs(10);
         }
-        let Some(frame) = self.grab() else { return Duration::from_secs(2) };
+        let Some(frame) = self.grab() else {
+            return Duration::from_secs(2);
+        };
 
         let faces = match self.engine.detect(&frame) {
             Ok(f) => f,
@@ -292,10 +374,9 @@ impl Mon {
         let mut results: Vec<FaceBox> = Vec::with_capacity(faces.len());
         let mut tracked = Vec::with_capacity(faces.len());
         for face in &faces {
-            let cached = self
-                .tracked
-                .iter()
-                .find(|t| now.duration_since(t.at) < REVERIFY && box_iou(&t.bbox, &face.bbox) > TRACK_IOU);
+            let cached = self.tracked.iter().find(|t| {
+                now.duration_since(t.at) < REVERIFY && box_iou(&t.bbox, &face.bbox) > TRACK_IOU
+            });
             let (name, score, at) = match cached {
                 Some(t) => (t.name.clone(), t.score, t.at),
                 None => match self.engine.embed(&frame, face) {
@@ -306,8 +387,17 @@ impl Mon {
                     Err(_) => continue,
                 },
             };
-            tracked.push(Tracked { bbox: face.bbox, name: name.clone(), score, at });
-            results.push(FaceBox { bbox: face.bbox, name, score });
+            tracked.push(Tracked {
+                bbox: face.bbox,
+                name: name.clone(),
+                score,
+                at,
+            });
+            results.push(FaceBox {
+                bbox: face.bbox,
+                name,
+                score,
+            });
         }
         self.tracked = tracked;
 
@@ -318,62 +408,75 @@ impl Mon {
         Duration::from_secs_f64(cfg.check_interval)
     }
 
-    fn triggers(&mut self, me: bool, stranger: bool, now: Instant, cfg: &crate::config::Config) {
-        let st = &cfg.triggers.stranger;
-        let ab = &cfg.triggers.absence;
-
-        // ---- Visage inconnu (délai de grâce optionnel + anti-spam)
-        if stranger && !(st.only_when_absent && me) {
-            let since = *self.trig.stranger_since.get_or_insert_with(|| {
-                if st.enabled && st.grace > 0.0 {
-                    self.sh.log("Visage inconnu — décompte lancé");
-                }
-                now
-            });
-            let cooled = self
-                .trig
-                .last_stranger_fire
-                .is_none_or(|t| now.duration_since(t).as_secs_f64() > cfg.stranger_cooldown);
-            if st.enabled && now.duration_since(since).as_secs_f64() >= st.grace && cooled {
-                self.sh.log("Visage inconnu détecté !");
-                self.fire(&st.actions);
-                self.trig.last_stranger_fire = Some(now);
-            }
+    fn triggers(&mut self, me: bool, stranger: bool, now: Instant, cfg: &Config) {
+        // Retour : transition « absent -> présent » après une absence suffisante.
+        let back_after = if me && !self.trig.me_present {
+            self.trig.absent_start.map(|t| now.duration_since(t))
         } else {
-            self.trig.stranger_since = None;
-        }
-
-        // ---- Absence
+            None
+        };
         if me {
-            if self.trig.absent_since.is_some() {
-                self.sh.log("Utilisateur reconnu — décompte annulé");
-            }
-            self.trig.absent_since = None;
-            self.trig.absence_fired = false;
-        } else if ab.enabled {
-            match self.trig.absent_since {
-                None => {
-                    self.trig.absent_since = Some(now);
-                    self.sh.log("Visage autorisé absent — décompte lancé");
-                }
-                Some(t) if !self.trig.absence_fired && now.duration_since(t).as_secs_f64() >= ab.grace => {
-                    self.sh.log(format!("Absence > {}s", ab.grace));
-                    self.fire(&ab.actions);
-                    self.trig.absence_fired = true;
-                }
-                _ => {}
-            }
+            self.trig.absent_start = None;
+        } else if self.trig.me_present || self.trig.absent_start.is_none() {
+            self.trig.absent_start = Some(now);
         }
-    }
+        self.trig.me_present = me;
 
-    fn fire(&self, list: &[crate::config::ActionConf]) {
-        if list.is_empty() {
-            self.sh.log("Aucune action configurée");
-            return;
-        }
-        for a in list {
-            self.sh.log(format!("Action : {}", actions::label(&a.action)));
-            actions::run(a, &|m| self.sh.log(m));
+        self.trig
+            .wf
+            .retain(|id, _| cfg.workflows.iter().any(|w| w.id == *id));
+        for wf in cfg.workflows.iter().filter(|w| w.enabled) {
+            let st = self.trig.wf.entry(wf.id).or_default();
+            let cooled = st
+                .last_fire
+                .is_none_or(|t| now.duration_since(t).as_secs_f64() >= wf.cooldown);
+            let fire = match &wf.trigger {
+                Trigger::Absence { grace } => {
+                    if me {
+                        if st.since.take().is_some() && !st.fired && *grace > 0.0 {
+                            self.sh
+                                .log(format!("« {} » : visage reconnu, décompte annulé", wf.name));
+                        }
+                        st.fired = false;
+                        false
+                    } else {
+                        let since = *st.since.get_or_insert_with(|| {
+                            if *grace > 0.0 {
+                                self.sh.log(format!(
+                                    "« {} » : absence détectée, décompte de {grace:.0} s",
+                                    wf.name
+                                ));
+                            }
+                            now
+                        });
+                        !st.fired && now.duration_since(since).as_secs_f64() >= *grace
+                    }
+                }
+                Trigger::Stranger { grace, when } => {
+                    let active = stranger
+                        && match when {
+                            StrangerWhen::Always => true,
+                            StrangerWhen::Alone => !me,
+                            StrangerWhen::WithMe => me,
+                        };
+                    if active {
+                        let since = *st.since.get_or_insert(now);
+                        now.duration_since(since).as_secs_f64() >= *grace && cooled
+                    } else {
+                        st.since = None;
+                        false
+                    }
+                }
+                Trigger::Return { min_absence } => {
+                    back_after.is_some_and(|d| d.as_secs_f64() >= *min_absence) && cooled
+                }
+                Trigger::Hotkey { .. } => false,
+            };
+            if fire {
+                st.fired = true;
+                st.last_fire = Some(now);
+                run_workflow(&self.sh, wf, None);
+            }
         }
     }
 
@@ -387,7 +490,9 @@ impl Mon {
         if !self.ensure_camera() {
             return Duration::from_secs(1);
         }
-        let Some(frame) = self.grab() else { return Duration::from_millis(500) };
+        let Some(frame) = self.grab() else {
+            return Duration::from_millis(500);
+        };
         let faces = self.engine.detect(&frame).unwrap_or_default();
         let one = faces.len() == 1;
         if let Some(info) = self.sh.enroll.lock().unwrap().as_mut() {
@@ -396,13 +501,25 @@ impl Mon {
         }
         let boxes: Vec<FaceBox> = faces
             .iter()
-            .map(|f| FaceBox { bbox: f.bbox, name: one.then(String::new), score: f.score })
+            .map(|f| FaceBox {
+                bbox: f.bbox,
+                name: one.then(String::new),
+                score: f.score,
+            })
             .collect();
         // On garde la frame courante pour une éventuelle capture ; l'image
         // publiée est une copie (uniquement pendant l'enrôlement).
-        let published = Frame { w: frame.w, h: frame.h, bgra: frame.bgra.clone() };
+        let published = Frame {
+            w: frame.w,
+            h: frame.h,
+            bgra: frame.bgra.clone(),
+        };
         if let Some(en) = self.enroll.as_mut() {
-            en.current = if one { Some((frame, faces[0].clone())) } else { None };
+            en.current = if one {
+                Some((frame, faces[0].clone()))
+            } else {
+                None
+            };
         }
         self.publish(published, boxes);
         ENROLL_PERIOD
