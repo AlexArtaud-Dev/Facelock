@@ -26,7 +26,9 @@ fn load(path: &str) -> engine::Frame {
 /// la détection ne doit rien trouver et l'empreinte doit être unitaire.
 fn synthetic(e: &mut engine::Engine) {
     let (w, h) = (640, 480);
-    let bgra: Vec<u8> = (0..w * h).flat_map(|i| [(i % w * 255 / w) as u8, (i / w * 255 / h) as u8, 128, 255]).collect();
+    let bgra: Vec<u8> = (0..w * h)
+        .flat_map(|i| [(i % w * 255 / w) as u8, (i / w * 255 / h) as u8, 128, 255])
+        .collect();
     let f = engine::Frame { w, h, bgra };
     let t = std::time::Instant::now();
     let faces = e.detect(&f).expect("détection");
@@ -40,8 +42,15 @@ fn synthetic(e: &mut engine::Engine) {
     let t = std::time::Instant::now();
     let emb = e.embed(&f, &face).expect("empreinte");
     let norm: f32 = emb.iter().map(|v| v * v).sum::<f32>().sqrt();
-    println!("empreinte : {} dimensions, norme {norm:.4}, en {:?}", emb.len(), t.elapsed());
-    assert!(emb.iter().all(|v| v.is_finite()) && (norm - 1.0).abs() < 1e-3, "empreinte invalide");
+    println!(
+        "empreinte : {} dimensions, norme {norm:.4}, en {:?}",
+        emb.len(),
+        t.elapsed()
+    );
+    assert!(
+        emb.iter().all(|v| v.is_finite()) && (norm - 1.0).abs() < 1e-3,
+        "empreinte invalide"
+    );
     println!("ok");
 }
 
@@ -61,7 +70,10 @@ fn main() {
             let t = std::time::Instant::now();
             let emb = e.embed(&f, face).unwrap();
             let te = t.elapsed();
-            eprintln!("{path}: det {td:?} emb {te:?} box {:?} score {:.3}", face.bbox, face.score);
+            eprintln!(
+                "{path}: det {td:?} emb {te:?} box {:?} score {:.3}",
+                face.bbox, face.score
+            );
             out.push(serde_json::json!({"path": path, "bbox": face.bbox, "lm": face.landmarks, "score": face.score, "emb": emb.to_vec()}));
         }
     }
