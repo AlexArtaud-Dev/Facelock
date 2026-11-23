@@ -116,47 +116,75 @@ unsafe fn hicon_rgba(icon: HICON) -> Option<Vec<u8>> {
 
 // ------------------------------------------------------ enregistreur
 
-const CAPTURE_WINDOW: Duration = Duration::from_millis(600);
-const CAPTURE_TIMEOUT: Duration = Duration::from_secs(8);
+const CAPTURE_TIMEOUT: Duration = Duration::from_secs(10);
+/// Après la touche principale : délai max pour relâcher les modificateurs.
+const RELEASE_GRACE: Duration = Duration::from_millis(1500);
+const VK_ESCAPE: u32 = 0x1B;
+
+#[derive(Default)]
+struct Capture {
+    /// Modificateurs actuellement enfoncés
+    held: u32,
+    /// (modificateurs, touche) capturés à l'appui de la touche principale
+    result: Option<(u32, u32)>,
+    done_at: Option<Instant>,
+    cancelled: bool,
+}
 
 thread_local! {
-    static PRESSED: RefCell<(Vec<u32>, Option<Instant>)> = const { RefCell::new((Vec::new(), None)) };
+    static CAPTURE: RefCell<Capture> = RefCell::new(Capture::default());
 }
 
 unsafe extern "system" fn ll_proc(code: i32, wp: WPARAM, lp: LPARAM) -> LRESULT {
     if code >= 0 {
         let kb = &*(lp.0 as *const KBDLLHOOKSTRUCT);
-        if wp.0 as u32 == WM_KEYDOWN || wp.0 as u32 == WM_SYSKEYDOWN {
-            PRESSED.with(|p| {
-                let mut p = p.borrow_mut();
-                if p.1.is_none() {
-                    p.1 = Some(Instant::now());
+        let down = matches!(wp.0 as u32, WM_KEYDOWN | WM_SYSKEYDOWN);
+        CAPTURE.with(|c| {
+            let mut c = c.borrow_mut();
+            match hotkey::vk_modifier(kb.vkCode) {
+                Some(m) if down => c.held |= m,
+                Some(m) => c.held &= !m,
+                // Touche principale : on fige la combinaison avec les
+                // modificateurs maintenus à cet instant.
+                None if down && c.result.is_none() && !c.cancelled => {
+                    if kb.vkCode == VK_ESCAPE && c.held == 0 {
+                        c.cancelled = true;
+                    } else {
+                        c.result = Some((c.held, kb.vkCode));
+                    }
+                    c.done_at = Some(Instant::now());
                 }
-                if !p.0.contains(&kb.vkCode) {
-                    p.0.push(kb.vkCode);
-                }
-            });
-        }
-        // Touches avalées pendant la capture : le combo n'agit pas ailleurs.
+                None => {}
+            }
+        });
+        // Touches avalées pendant la capture : la combinaison n'agit nulle
+        // part ailleurs (y compris les relâchements, pour ne pas ouvrir le
+        // menu Démarrer avec un « Win » orphelin).
         return LRESULT(1);
     }
     CallNextHookEx(None, code, wp, lp)
 }
 
 /// Capture bloquante d'une combinaison (à lancer dans un thread).
-/// Renvoie "" si rien n'a été pressé, sinon la forme canonique "ctrl+alt+p".
+/// Se termine dès qu'une touche principale est pressée (avec les
+/// modificateurs maintenus), au rythme de l'utilisateur. Renvoie "" en cas
+/// d'annulation (Échap) ou après 10 s sans touche principale.
 pub fn record_combo() -> String {
-    PRESSED.with(|p| *p.borrow_mut() = (Vec::new(), None));
+    CAPTURE.with(|c| *c.borrow_mut() = Capture::default());
     unsafe {
         let Ok(hook) = SetWindowsHookExW(WH_KEYBOARD_LL, Some(ll_proc), None, 0) else {
             return String::new();
         };
         let start = Instant::now();
-        let timer = SetTimer(None, 0, 30, None);
+        let timer = SetTimer(None, 0, 20, None);
         let mut msg = MSG::default();
         while GetMessageW(&mut msg, None, 0, 0).as_bool() {
-            let first = PRESSED.with(|p| p.borrow().1);
-            if first.is_some_and(|t| t.elapsed() >= CAPTURE_WINDOW) || start.elapsed() >= CAPTURE_TIMEOUT {
+            let finished = CAPTURE.with(|c| {
+                let c = c.borrow();
+                // Fini quand tout est relâché (ou après un court délai).
+                c.done_at.is_some_and(|t| c.held == 0 || t.elapsed() >= RELEASE_GRACE)
+            });
+            if finished || start.elapsed() >= CAPTURE_TIMEOUT {
                 break;
             }
             DispatchMessageW(&msg);
@@ -164,20 +192,10 @@ pub fn record_combo() -> String {
         let _ = KillTimer(None, timer);
         let _ = UnhookWindowsHookEx(hook);
     }
-    let keys = PRESSED.with(|p| p.borrow().0.clone());
-    let mut mods = 0;
-    let mut main = None;
-    for vk in keys {
-        match hotkey::vk_modifier(vk) {
-            Some(m) => mods |= m,
-            None if main.is_none() => main = Some(vk),
-            None => {}
-        }
-    }
-    match main {
-        Some(vk) => hotkey::format_combo(mods, vk),
-        None => String::new(),
-    }
+    CAPTURE
+        .with(|c| c.borrow().result)
+        .map(|(mods, vk)| hotkey::format_combo(mods, vk))
+        .unwrap_or_default()
 }
 
 // -------------------------------------------------- démarrage auto
@@ -231,5 +249,91 @@ pub fn set_autostart(on: bool) -> bool {
         };
         let _ = RegCloseKey(key);
         ok
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use windows::Win32::UI::Input::KeyboardAndMouse::*;
+
+    fn key(vk: VIRTUAL_KEY, up: bool) -> INPUT {
+        INPUT {
+            r#type: INPUT_KEYBOARD,
+            Anonymous: INPUT_0 {
+                ki: KEYBDINPUT {
+                    wVk: vk,
+                    dwFlags: if up { KEYEVENTF_KEYUP } else { Default::default() },
+                    ..Default::default()
+                },
+            },
+        }
+    }
+
+    /// Nécessite une session interactive (hook clavier bas niveau) : `cargo test -- --ignored`.
+    /// Appui « humain » : modificateurs d'abord, la lettre près d'une seconde après.
+    #[test]
+    #[ignore]
+    fn records_slow_combo() {
+        let t = std::thread::spawn(super::record_combo);
+        std::thread::sleep(std::time::Duration::from_millis(400));
+        let mods = [key(VK_CONTROL, false), key(VK_MENU, false), key(VK_SHIFT, false)];
+        unsafe { SendInput(&mods, std::mem::size_of::<INPUT>() as i32) };
+        std::thread::sleep(std::time::Duration::from_millis(900));
+        let rest = [
+            key(VIRTUAL_KEY(0x55), false),
+            key(VIRTUAL_KEY(0x55), true),
+            key(VK_SHIFT, true),
+            key(VK_MENU, true),
+            key(VK_CONTROL, true),
+        ];
+        unsafe { SendInput(&rest, std::mem::size_of::<INPUT>() as i32) };
+        assert_eq!(t.join().unwrap(), "ctrl+alt+shift+u");
+    }
+
+    /// Un modificateur relâché avant la lettre ne fait pas partie du raccourci.
+    #[test]
+    #[ignore]
+    fn ignores_released_modifier() {
+        let t = std::thread::spawn(super::record_combo);
+        std::thread::sleep(std::time::Duration::from_millis(400));
+        let seq = [
+            key(VK_SHIFT, false),
+            key(VK_SHIFT, true),
+            key(VK_CONTROL, false),
+            key(VK_F9, false),
+            key(VK_F9, true),
+            key(VK_CONTROL, true),
+        ];
+        unsafe { SendInput(&seq, std::mem::size_of::<INPUT>() as i32) };
+        assert_eq!(t.join().unwrap(), "ctrl+f9");
+    }
+
+    #[test]
+    #[ignore]
+    fn escape_cancels() {
+        let t = std::thread::spawn(super::record_combo);
+        std::thread::sleep(std::time::Duration::from_millis(400));
+        let seq = [key(VK_ESCAPE, false), key(VK_ESCAPE, true)];
+        unsafe { SendInput(&seq, std::mem::size_of::<INPUT>() as i32) };
+        assert_eq!(t.join().unwrap(), "");
+    }
+
+    #[test]
+    #[ignore]
+    fn records_injected_combo() {
+        let t = std::thread::spawn(super::record_combo);
+        std::thread::sleep(std::time::Duration::from_millis(400));
+        let seq = [
+            key(VK_CONTROL, false),
+            key(VK_MENU, false),
+            key(VK_SHIFT, false),
+            key(VIRTUAL_KEY(0x55), false),
+            key(VIRTUAL_KEY(0x55), true),
+            key(VK_SHIFT, true),
+            key(VK_MENU, true),
+            key(VK_CONTROL, true),
+        ];
+        unsafe { SendInput(&seq, std::mem::size_of::<INPUT>() as i32) };
+        assert_eq!(t.join().unwrap(), "ctrl+alt+shift+u");
     }
 }

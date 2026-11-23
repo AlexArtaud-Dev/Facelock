@@ -392,9 +392,14 @@ impl App {
                 let target = *target;
                 self.recording = None;
                 self.send(Cmd::PauseHotkeys { paused: false });
-                if !combo.is_empty() {
+                if combo.is_empty() {
+                    self.toast("Enregistrement annulé : aucune touche principale reçue", false);
+                } else {
                     match hotkey::parse_combo(&combo) {
-                        Ok(_) => self.set_combo(target, combo),
+                        Ok(_) => {
+                            self.toast(format!("Raccourci enregistré : {}", hotkey::pretty(&combo)), true);
+                            self.set_combo(target, combo);
+                        }
                         Err(e) => self.toast(format!("Raccourci refusé : {e}"), false),
                     }
                 }
