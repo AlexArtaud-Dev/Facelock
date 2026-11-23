@@ -130,6 +130,7 @@ pub enum Cmd {
         name: String,
     },
     Quit,
+    DismissOverlay,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]

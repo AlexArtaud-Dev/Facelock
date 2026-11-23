@@ -26,6 +26,9 @@ pub struct Kind {
     pub desktop: bool,
     pub text: bool,
     pub seconds: bool,
+    /// Écran de confidentialité (image, raccourci de secours…)
+    #[allow(dead_code)]
+    pub overlay: bool,
 }
 
 const fn k(id: &'static str, label: &'static str, desc: &'static str, icon: char) -> Kind {
@@ -38,10 +41,20 @@ const fn k(id: &'static str, label: &'static str, desc: &'static str, icon: char
         desktop: false,
         text: false,
         seconds: false,
+        overlay: false,
     }
 }
 
 pub const KINDS: &[Kind] = &[
+    Kind {
+        overlay: true,
+        ..k(
+            "privacy_screen",
+            "Écran de confidentialité",
+            "Masque tout l'écran avec un message ou une image",
+            '\u{E224}',
+        )
+    },
     k(
         "lock",
         "Verrouiller la session",
@@ -130,10 +143,14 @@ pub fn run_all(actions: &[ActionConf], log: &dyn Fn(String)) {
 }
 
 pub fn run(a: &ActionConf, log: &dyn Fn(String)) {
+    if let Some(problem) = a.problem() {
+        return log(format!("[erreur] {} : {problem}", kind(&a.action).label));
+    }
     let p = &a.params;
     let process = p.process.trim();
     let title = p.title.trim();
     match a.action.as_str() {
+        "privacy_screen" => crate::daemon::show_overlay(p, log),
         "lock" => sys::lock(log),
         "sleep" => sys::sleep(log),
         "switch_desktop" => sys::switch_desktop(p.desktop.unwrap_or(1).max(1), log),
@@ -152,9 +169,6 @@ pub fn run(a: &ActionConf, log: &dyn Fn(String)) {
         "wait" => {
             let secs = p.seconds.unwrap_or(1.0).clamp(0.0, 60.0);
             std::thread::sleep(std::time::Duration::from_secs_f64(secs));
-        }
-        "kill_app" | "minimize_app" | "move_app" if process.is_empty() => {
-            log("[erreur] Aucune application cible configurée".into());
         }
         "kill_app" => sys::kill_app(process, title, log),
         "minimize_app" => sys::minimize_app(process, title, log),
@@ -179,4 +193,20 @@ pub fn pids_of(process: &str) -> std::collections::HashSet<u32> {
         .filter(|(_, n)| n.to_lowercase() == target)
         .map(|(p, _)| p)
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::config::{action, ActionConf};
+
+    #[test]
+    fn privacy_screen_requires_a_valid_hotkey() {
+        let mut a: ActionConf = action("privacy_screen");
+        assert_eq!(a.problem(), Some("raccourci de secours requis"));
+        a.params.hotkey = "a+b".into();
+        assert_eq!(a.problem(), Some("raccourci de secours invalide"));
+        a.params.hotkey = "ctrl+alt+shift+u".into();
+        assert_eq!(a.problem(), None);
+        assert!(a.params.closes_on_return());
+    }
 }

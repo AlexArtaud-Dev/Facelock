@@ -3,6 +3,7 @@
 //! fermer la fenêtre termine le processus et libère toute sa mémoire.
 
 mod flow;
+pub mod overlay;
 mod theme;
 
 use crate::config::{Config, Trigger, Workflow};
@@ -165,6 +166,7 @@ enum Rec {
     Toggle,
     Reset,
     Workflow(u64),
+    Action(u64, usize),
 }
 
 struct Picker {
@@ -415,6 +417,17 @@ impl App {
                     *c = combo;
                 }
             }
+            Rec::Action(id, i) => {
+                if let Some(a) = self
+                    .cfg
+                    .workflows
+                    .iter_mut()
+                    .find(|w| w.id == id)
+                    .and_then(|w| w.actions.get_mut(i))
+                {
+                    a.params.hotkey = combo;
+                }
+            }
         }
     }
 
@@ -478,7 +491,7 @@ impl App {
 }
 
 /// Nom de touche egui -> nom FaceLock (« a », « f5 », « page up »…).
-fn egui_key_name(key: egui::Key) -> Option<String> {
+pub(crate) fn egui_key_name(key: egui::Key) -> Option<String> {
     use egui::Key;
     let n = match key {
         Key::Space => "space",
@@ -966,12 +979,17 @@ impl App {
             Some(_) => Some(0),
             None => None,
         };
+        let recording_action = match self.recording.as_ref().map(|r| r.0) {
+            Some(Rec::Action(id, i)) => Some((id, i)),
+            _ => None,
+        };
         let mut workflows = std::mem::take(&mut self.cfg.workflows);
         for (i, wf) in workflows.iter_mut().enumerate() {
             let mut cx = flow::Ctx {
                 sel: &mut self.sel,
                 ops: &mut ops,
                 recording,
+                recording_action,
             };
             flow::workflow_card(ui, i, wf, &mut cx);
             ui.add_space(12.0);
@@ -1009,6 +1027,7 @@ impl App {
                     })
                 }
                 Op::Record(id) => self.start_recording(&ctx, Rec::Workflow(id)),
+                Op::RecordAction(id, i) => self.start_recording(&ctx, Rec::Action(id, i)),
             }
         }
     }

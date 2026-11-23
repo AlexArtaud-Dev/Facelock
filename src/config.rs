@@ -16,6 +16,37 @@ pub struct Params {
     pub seconds: Option<f64>,
     #[serde(skip_serializing_if = "String::is_empty")]
     pub text: String,
+    /// Écran de confidentialité : image (chemin) à afficher en plein écran
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub image: String,
+    /// Écran de confidentialité : raccourci de fermeture (obligatoire)
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub hotkey: String,
+    /// Écran de confidentialité : fermeture automatique quand un visage autorisé revient
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub close_on_return: Option<bool>,
+}
+
+impl Params {
+    pub fn closes_on_return(&self) -> bool {
+        self.close_on_return.unwrap_or(true)
+    }
+}
+
+impl ActionConf {
+    /// Problème bloquant de configuration (affiché dans l'éditeur, refusé à l'exécution).
+    pub fn problem(&self) -> Option<&'static str> {
+        match self.action.as_str() {
+            "privacy_screen" if self.params.hotkey.trim().is_empty() => Some("raccourci de secours requis"),
+            "privacy_screen" if crate::hotkey::parse_combo(&self.params.hotkey).is_err() => {
+                Some("raccourci de secours invalide")
+            }
+            "kill_app" | "minimize_app" | "move_app" if self.params.process.trim().is_empty() => {
+                Some("application à choisir")
+            }
+            _ => None,
+        }
+    }
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
