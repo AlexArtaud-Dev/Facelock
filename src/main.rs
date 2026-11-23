@@ -5,6 +5,7 @@
 //!   facelock --toggle           met en pause / relance la surveillance
 //!   facelock --reset            réinitialise la vérification
 //!   facelock --run "<nom>"      exécute un workflow (raccourcis du bureau, scripts)
+//!   facelock --dismiss          ferme l'écran de confidentialité
 //!   facelock --quit             arrête le service
 #![windows_subsystem = "windows"]
 
@@ -31,6 +32,7 @@ Usage :
   facelock --toggle         met en pause / relance la surveillance
   facelock --reset          réinitialise la vérification
   facelock --run \"<nom>\"    exécute le workflow portant ce nom
+  facelock --dismiss        ferme l'écran de confidentialité
   facelock --quit           arrête le service
   facelock --version        affiche la version";
 
@@ -62,6 +64,15 @@ fn main() {
         Some("--toggle") => send(Cmd::ToggleSuspend),
         Some("--reset") => send(Cmd::Reset),
         Some("--quit") => send(Cmd::Quit),
+        Some("--dismiss") => send(Cmd::DismissOverlay),
+        Some("--overlay") => {
+            let spec = args
+                .get(1)
+                .and_then(|j| serde_json::from_str(j).ok())
+                .unwrap_or_default();
+            ui::overlay::run(spec);
+            0
+        }
         Some("--run") => match args.get(1) {
             Some(name) => send(Cmd::RunNamed { name: name.clone() }),
             None => {

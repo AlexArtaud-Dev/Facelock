@@ -24,9 +24,13 @@ use self::windows as plat;
 pub(crate) const HK_TOGGLE: i32 = 1;
 pub(crate) const HK_RESET: i32 = 2;
 pub(crate) const HK_WORKFLOW: i32 = 100;
+/// Raccourcis de secours des écrans de confidentialité.
+pub(crate) const HK_OVERLAY: i32 = 1000;
 
 static SHARED: OnceLock<Arc<Shared>> = OnceLock::new();
 static UI_CHILD: Mutex<Option<Child>> = Mutex::new(None);
+/// Écran de confidentialité affiché : (processus, fermeture au retour du visage).
+static OVERLAY: Mutex<Option<(Child, bool)>> = Mutex::new(None);
 static APPLIED_HOTKEYS: Mutex<Vec<HotkeySpec>> = Mutex::new(Vec::new());
 
 /// (id, combinaison, libellé, id du workflow éventuel)
@@ -81,6 +85,7 @@ pub fn run() {
     shared.log("Arrêt de FaceLock");
     shared.send(MonCmd::Quit);
     let _ = monitor.join();
+    dismiss_overlay("arrêt du service");
     if let Some(mut c) = UI_CHILD.lock().unwrap().take() {
         let _ = c.kill();
     }
@@ -101,6 +106,20 @@ pub(crate) fn apply_hotkeys(
     if !s.hotkeys_paused.load(Ordering::SeqCst) {
         wanted.push((HK_TOGGLE, cfg.hotkeys.toggle.clone(), "pause / reprise".into(), None));
         wanted.push((HK_RESET, cfg.hotkeys.reset.clone(), "réinitialiser".into(), None));
+        // Raccourcis de secours des écrans de confidentialité (un par combinaison).
+        let mut seen = Vec::new();
+        for a in cfg.workflows.iter().filter(|w| w.enabled).flat_map(|w| &w.actions) {
+            let combo = a.params.hotkey.trim();
+            if a.action == "privacy_screen" && !combo.is_empty() && !seen.contains(&combo.to_string()) {
+                seen.push(combo.to_string());
+                wanted.push((
+                    HK_OVERLAY + seen.len() as i32,
+                    combo.to_string(),
+                    "fermer l'écran de confidentialité".into(),
+                    None,
+                ));
+            }
+        }
         for (i, wf) in cfg.workflows.iter().enumerate().filter(|(_, w)| w.enabled) {
             if let Trigger::Hotkey { combo } = &wf.trigger {
                 wanted.push((
@@ -149,6 +168,10 @@ pub(crate) fn apply_hotkeys(
 pub(crate) fn on_hotkey(id: i32) {
     let s = sh();
     let cfg = s.cfg();
+    if id >= HK_OVERLAY {
+        dismiss_overlay("raccourci de secours");
+        return;
+    }
     if id >= HK_WORKFLOW {
         let wf_id = APPLIED_HOTKEYS
             .lock()
@@ -184,6 +207,70 @@ pub(crate) fn on_hotkey(id: i32) {
 }
 
 // ----------------------------------------------------------------------- UI
+
+// ------------------------------------------------- écran de confidentialité
+
+/// Description transmise au processus d'affichage (`facelock --overlay <json>`).
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug, Default)]
+pub struct OverlaySpec {
+    pub text: String,
+    pub image: String,
+    pub hotkey: String,
+}
+
+/// Affiche l'écran de confidentialité dans un processus séparé. Le service
+/// garde la main : son raccourci global (ou le retour du visage) le ferme,
+/// même si la fenêtre ne répond plus.
+pub fn show_overlay(p: &crate::config::Params, log: &dyn Fn(String)) {
+    let mut cur = OVERLAY.lock().unwrap();
+    if let Some((child, _)) = cur.as_mut() {
+        if matches!(child.try_wait(), Ok(None)) {
+            return; // déjà affiché
+        }
+    }
+    let spec = OverlaySpec {
+        text: p.text.trim().to_string(),
+        image: p.image.trim().to_string(),
+        hotkey: p.hotkey.clone(),
+    };
+    let json = serde_json::to_string(&spec).unwrap_or_default();
+    match std::env::current_exe().and_then(|exe| std::process::Command::new(exe).args(["--overlay", &json]).spawn()) {
+        Ok(child) => {
+            plat::allow_foreground(Some(child.id()));
+            log(format!(
+                "Écran de confidentialité affiché (fermeture : {})",
+                hotkey::pretty(&p.hotkey)
+            ));
+            *cur = Some((child, p.closes_on_return()));
+        }
+        Err(e) => log(format!("[erreur] Écran de confidentialité impossible : {e}")),
+    }
+}
+
+pub fn dismiss_overlay(reason: &str) {
+    if let Some((mut child, _)) = OVERLAY.lock().unwrap().take() {
+        let running = matches!(child.try_wait(), Ok(None));
+        let _ = child.kill();
+        let _ = child.wait();
+        if running {
+            if let Some(s) = SHARED.get() {
+                s.log(format!("Écran de confidentialité fermé ({reason})"));
+            }
+        }
+    }
+}
+
+/// Appelé par le moniteur quand un visage autorisé est reconnu.
+pub fn on_authorized_face() {
+    let close = OVERLAY
+        .lock()
+        .unwrap()
+        .as_ref()
+        .is_some_and(|(_, on_return)| *on_return);
+    if close {
+        dismiss_overlay("visage autorisé reconnu");
+    }
+}
 
 pub(crate) fn open_ui(page: &str) {
     let s = sh();
@@ -302,6 +389,7 @@ fn handle_cmd(s: &Arc<Shared>, cmd: Cmd) -> (bool, Option<String>) {
             }
         }
         Cmd::Quit => plat::quit(),
+        Cmd::DismissOverlay => dismiss_overlay("ligne de commande"),
         Cmd::RunNamed { name } => {
             let cfg = s.cfg();
             let wanted = name.trim().to_lowercase();

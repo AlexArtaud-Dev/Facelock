@@ -389,6 +389,9 @@ impl Mon {
         self.tracked = tracked;
 
         let me = results.iter().any(|r| r.name.is_some());
+        if me {
+            crate::daemon::on_authorized_face();
+        }
         let stranger = results.iter().any(|r| r.name.is_none());
         self.publish(frame, results);
         self.triggers(me, stranger, now, &cfg);

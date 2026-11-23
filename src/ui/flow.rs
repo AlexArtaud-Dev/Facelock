@@ -19,6 +19,8 @@ pub enum Op {
     Test(u64),
     Browse(u64, usize),
     Record(u64),
+    /// Raccourci de secours d'un écran de confidentialité (workflow, action)
+    RecordAction(u64, usize),
 }
 
 pub struct TriggerMeta {
@@ -100,6 +102,9 @@ pub fn action_color(id: &str) -> Color32 {
 }
 
 pub fn action_summary(a: &ActionConf) -> String {
+    if let Some(problem) = a.problem() {
+        return format!("⚠ {problem}");
+    }
     let k = actions::kind(&a.action);
     let p = &a.params;
     let proc_ = if p.process.trim().is_empty() {
@@ -116,6 +121,20 @@ pub fn action_summary(a: &ActionConf) -> String {
         "minimize_app" | "kill_app" => proc_,
         "notify" if !p.text.trim().is_empty() => format!("« {} »", p.text.trim()),
         "wait" => format!("{:.0} s", p.seconds.unwrap_or(1.0)),
+        "privacy_screen" if !p.image.trim().is_empty() => format!(
+            "Image · {}",
+            std::path::Path::new(p.image.trim())
+                .file_name()
+                .map(|f| f.to_string_lossy().into_owned())
+                .unwrap_or_default()
+        ),
+        "privacy_screen" => p
+            .text
+            .lines()
+            .next()
+            .filter(|l| !l.trim().is_empty())
+            .unwrap_or("Accès non autorisé")
+            .to_string(),
         _ => k.desc.to_string(),
     }
 }
@@ -158,11 +177,12 @@ fn node(
     let w = rect.right() - x - 10.0;
     let cap = one_line(ui, caption, FontId::new(10.5, semibold()), color, w);
     let t = one_line(ui, title, FontId::new(14.0, semibold()), TEXT, w);
-    let s = one_line(ui, sub, FontId::proportional(12.0), MUTED, w);
+    let sub_color = if sub.starts_with('⚠') { RED } else { MUTED };
+    let s = one_line(ui, sub, FontId::proportional(12.0), sub_color, w);
     let p = ui.painter();
     p.galley(egui::pos2(x, rect.top() + 11.0), cap, color);
     p.galley(egui::pos2(x, rect.top() + 26.0), t, TEXT);
-    p.galley(egui::pos2(x, rect.top() + 46.0), s, MUTED);
+    p.galley(egui::pos2(x, rect.top() + 46.0), s, sub_color);
     resp.on_hover_cursor(egui::CursorIcon::PointingHand)
 }
 
@@ -232,6 +252,7 @@ pub struct Ctx<'a> {
     pub sel: &'a mut Option<(u64, Sel)>,
     pub ops: &'a mut Vec<Op>,
     pub recording: Option<u64>,
+    pub recording_action: Option<(u64, usize)>,
 }
 
 pub fn workflow_card(ui: &mut egui::Ui, idx: usize, wf: &mut Workflow, cx: &mut Ctx) {
@@ -261,6 +282,9 @@ pub fn workflow_card(ui: &mut egui::Ui, idx: usize, wf: &mut Workflow, cx: &mut 
                     if wf.enabled { "Actif" } else { "En pause" },
                     if wf.enabled { GREEN } else { MUTED },
                 );
+                if wf.actions.iter().any(|a| a.problem().is_some()) {
+                    badge(ui, "Incomplet", ORANGE);
+                }
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     toggle(ui, &mut wf.enabled).on_hover_text(if wf.enabled { "Désactiver" } else { "Activer" });
                     ui.add_space(6.0);
@@ -500,6 +524,7 @@ fn action_editor(ui: &mut egui::Ui, wf: &mut Workflow, i: usize, cx: &mut Ctx) {
     if i >= wf.actions.len() {
         return;
     }
+    let wf_id = wf.id;
     let a = &mut wf.actions[i];
     // Grille des types d'action
     ui.horizontal_wrapped(|ui| {
@@ -574,6 +599,64 @@ fn action_editor(ui: &mut egui::Ui, wf: &mut Workflow, i: usize, cx: &mut Ctx) {
             }
         });
     }
+    if k.overlay {
+        overlay_editor(ui, a, wf_id, i, cx);
+    }
+}
+
+/// Réglages de l'écran de confidentialité (raccourci de secours obligatoire).
+fn overlay_editor(ui: &mut egui::Ui, a: &mut ActionConf, wf_id: u64, i: usize, cx: &mut Ctx) {
+    ui.horizontal_top(|ui| {
+        field_label(ui, "Message");
+        ui.add(
+            egui::TextEdit::multiline(&mut a.params.text)
+                .hint_text("Accès non autorisé\nCe poste est protégé : vous n'êtes pas autorisé à le consulter.")
+                .desired_rows(2)
+                .desired_width(380.0),
+        );
+    });
+    ui.horizontal(|ui| {
+        field_label(ui, "Image (optionnel)");
+        ui.add(
+            egui::TextEdit::singleline(&mut a.params.image)
+                .hint_text("chemin d'une image PNG, JPEG ou WebP")
+                .desired_width(380.0),
+        );
+    });
+    ui.horizontal(|ui| {
+        field_label(ui, "Raccourci de secours");
+        let recording = cx.recording_action == Some((wf_id, i));
+        if recording {
+            ui.label(egui::RichText::new("Appuie sur ta combinaison…").color(ORANGE));
+        } else if a.params.hotkey.trim().is_empty() {
+            ui.label(egui::RichText::new("obligatoire").color(RED));
+        } else {
+            keycaps(ui, &a.params.hotkey);
+        }
+        ui.add_space(8.0);
+        let label = if a.params.hotkey.is_empty() {
+            "Enregistrer"
+        } else {
+            "Modifier"
+        };
+        if button(ui, Some(I_KEYBOARD), label, Kind::Ghost, cx.recording.is_none()).clicked() {
+            cx.ops.push(Op::RecordAction(wf_id, i));
+        }
+    });
+    ui.horizontal(|ui| {
+        field_label(ui, "");
+        ui.label(small(
+            "Ferme l'écran à tout moment, même s'il ne répond plus. Choisis une combinaison peu courante (ex. Ctrl + Alt + Maj + U).",
+        ));
+    });
+    ui.horizontal(|ui| {
+        field_label(ui, "Fermeture auto");
+        let mut c = a.params.closes_on_return();
+        if toggle(ui, &mut c).changed() {
+            a.params.close_on_return = Some(c);
+        }
+        ui.label(muted("dès que ton visage est reconnu"));
+    });
 }
 
 // ------------------------------------------------------------ modèles
@@ -601,6 +684,21 @@ fn with(id: &str, f: impl FnOnce(&mut crate::config::Params)) -> ActionConf {
 }
 
 pub const PRESETS: &[Preset] = &[
+    Preset {
+        title: "Écran de confidentialité",
+        desc: "Un inconnu regarde pendant ton absence : écran plein « Accès non autorisé ».",
+        build: || {
+            wf(
+                "Écran de confidentialité",
+                Trigger::Stranger {
+                    grace: 0.0,
+                    when: StrangerWhen::Alone,
+                },
+                vec![action("privacy_screen")],
+                10.0,
+            )
+        },
+    },
     Preset {
         title: "Verrouillage automatique",
         desc: "Tu t'éloignes : la session se verrouille après 30 s.",

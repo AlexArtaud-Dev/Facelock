@@ -5,6 +5,9 @@ mod config;
 #[path = "../src/engine.rs"]
 #[allow(dead_code)]
 mod engine;
+#[path = "../src/hotkey.rs"]
+#[allow(dead_code)]
+mod hotkey;
 
 fn load(path: &str) -> engine::Frame {
     let img = image::open(path).unwrap().to_rgb8();
