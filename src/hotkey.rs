@@ -60,14 +60,13 @@ fn modifier_of(name: &str) -> Option<u32> {
         "ctrl" | "control" | "left ctrl" | "right ctrl" => MOD_CONTROL,
         "alt" | "left alt" | "right alt" | "alt gr" => MOD_ALT,
         "shift" | "left shift" | "right shift" => MOD_SHIFT,
-        "windows" | "win" | "left windows" | "right windows" | "cmd" | "command" | "super" => {
-            MOD_WIN
-        }
+        "windows" | "win" | "left windows" | "right windows" | "cmd" | "command" | "super" => MOD_WIN,
         _ => return None,
     })
 }
 
 /// Modificateur correspondant à un code VK (pour l'enregistreur).
+#[cfg_attr(not(windows), allow(dead_code))]
 pub fn vk_modifier(vk: u32) -> Option<u32> {
     Some(match vk {
         0x10 | 0xA0 | 0xA1 => MOD_SHIFT,
@@ -107,6 +106,7 @@ pub fn vk_from_name(name: &str) -> Option<u32> {
         .map(|(vk, _, _)| *vk)
 }
 
+#[cfg_attr(not(windows), allow(dead_code))]
 pub fn vk_name(vk: u32) -> String {
     match vk {
         0x41..=0x5A => ((vk as u8) as char).to_ascii_lowercase().to_string(),
@@ -119,6 +119,62 @@ pub fn vk_name(vk: u32) -> String {
             .map(|(_, n, _)| n.to_string())
             .unwrap_or_else(|| format!("vk{vk:02x}")),
     }
+}
+
+/// Code VK (Windows) -> keysym X11 équivalent.
+#[allow(dead_code)]
+pub fn x11_keysym(vk: u32) -> Option<u32> {
+    Some(match vk {
+        0x41..=0x5A => vk + 0x20, // lettres : keysym minuscule
+        0x30..=0x39 => vk,
+        0x70..=0x87 => 0xFFBE + (vk - 0x70), // F1..F24
+        0x60..=0x69 => 0xFFB0 + (vk - 0x60), // pavé numérique
+        0x08 => 0xFF08,
+        0x09 => 0xFF09,
+        0x0D => 0xFF0D,
+        0x13 => 0xFF13,
+        0x14 => 0xFFE5,
+        0x1B => 0xFF1B,
+        0x20 => 0x20,
+        0x21 => 0xFF55,
+        0x22 => 0xFF56,
+        0x23 => 0xFF57,
+        0x24 => 0xFF50,
+        0x25 => 0xFF51,
+        0x26 => 0xFF52,
+        0x27 => 0xFF53,
+        0x28 => 0xFF54,
+        0x2C => 0xFF61,
+        0x2D => 0xFF63,
+        0x2E => 0xFFFF,
+        0x5D => 0xFF67,
+        0x6A => 0xFFAA,
+        0x6B => 0xFFAB,
+        0x6D => 0xFFAD,
+        0x6E => 0xFFAE,
+        0x6F => 0xFFAF,
+        0x90 => 0xFF7F,
+        0x91 => 0xFF14,
+        0xAD => 0x1008_FF12,
+        0xAE => 0x1008_FF11,
+        0xAF => 0x1008_FF13,
+        0xB0 => 0x1008_FF17,
+        0xB1 => 0x1008_FF16,
+        0xB2 => 0x1008_FF15,
+        0xB3 => 0x1008_FF14,
+        0xBA => 0x3B,
+        0xBB => 0x3D,
+        0xBC => 0x2C,
+        0xBD => 0x2D,
+        0xBE => 0x2E,
+        0xBF => 0x2F,
+        0xC0 => 0x60,
+        0xDB => 0x5B,
+        0xDC => 0x5C,
+        0xDD => 0x5D,
+        0xDE => 0x27,
+        _ => return None,
+    })
 }
 
 /// "ctrl+alt+p" -> (MOD_CONTROL|MOD_ALT, 'P'). Une seule touche non-modificatrice.
@@ -144,6 +200,7 @@ pub fn parse_combo(combo: &str) -> Result<(u32, u32), String> {
 }
 
 /// Forme canonique d'une combinaison : modificateurs ordonnés puis touche.
+#[cfg_attr(not(windows), allow(dead_code))]
 pub fn format_combo(mods: u32, vk: u32) -> String {
     let mut parts: Vec<String> = Vec::new();
     if mods & MOD_CONTROL != 0 {
@@ -183,14 +240,8 @@ mod tests {
     use super::*;
     #[test]
     fn roundtrip() {
-        assert_eq!(
-            parse_combo("alt+ctrl+p").unwrap(),
-            (MOD_ALT | MOD_CONTROL, 0x50)
-        );
-        assert_eq!(
-            parse_combo("ctrl+shift+f12").unwrap(),
-            (MOD_CONTROL | MOD_SHIFT, 0x7B)
-        );
+        assert_eq!(parse_combo("alt+ctrl+p").unwrap(), (MOD_ALT | MOD_CONTROL, 0x50));
+        assert_eq!(parse_combo("ctrl+shift+f12").unwrap(), (MOD_CONTROL | MOD_SHIFT, 0x7B));
         assert_eq!(format_combo(MOD_CONTROL | MOD_ALT, 0x57), "ctrl+alt+w");
         assert!(parse_combo("a+b").is_err());
         assert!(parse_combo("ctrl").is_err());

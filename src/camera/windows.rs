@@ -77,7 +77,11 @@ pub struct Camera {
 
 impl Camera {
     /// Ouvre la caméra `name` si elle existe, sinon l'index donné.
-    pub fn open(index: usize, name: &str, want: [u32; 2]) -> windows::core::Result<Self> {
+    pub fn open(index: usize, name: &str, want: [u32; 2]) -> Result<Self, String> {
+        Self::open_inner(index, name, want).map_err(|e| e.message())
+    }
+
+    fn open_inner(index: usize, name: &str, want: [u32; 2]) -> windows::core::Result<Self> {
         let devs = devices()?;
         let pos = devs
             .iter()
@@ -164,7 +168,11 @@ impl Camera {
 
     /// Lit une image. `fresh` vide d'abord la file interne pour obtenir une
     /// image prise maintenant et non il y a plusieurs secondes.
-    pub fn read(&mut self, fresh: bool) -> windows::core::Result<Frame> {
+    pub fn read(&mut self, fresh: bool) -> Result<Frame, String> {
+        self.read_inner(fresh).map_err(|e| e.message())
+    }
+
+    fn read_inner(&mut self, fresh: bool) -> windows::core::Result<Frame> {
         unsafe {
             if fresh {
                 let _ = self.reader.Flush(FIRST_VIDEO);
@@ -172,18 +180,9 @@ impl Camera {
             for _ in 0..50 {
                 let mut flags = 0u32;
                 let mut sample: Option<IMFSample> = None;
-                self.reader.ReadSample(
-                    FIRST_VIDEO,
-                    0,
-                    None,
-                    Some(&mut flags),
-                    None,
-                    Some(&mut sample),
-                )?;
-                if flags
-                    & (MF_SOURCE_READERF_ERROR.0 as u32 | MF_SOURCE_READERF_ENDOFSTREAM.0 as u32)
-                    != 0
-                {
+                self.reader
+                    .ReadSample(FIRST_VIDEO, 0, None, Some(&mut flags), None, Some(&mut sample))?;
+                if flags & (MF_SOURCE_READERF_ERROR.0 as u32 | MF_SOURCE_READERF_ENDOFSTREAM.0 as u32) != 0 {
                     return Err(windows::core::Error::from(MF_E_INVALIDREQUEST));
                 }
                 if flags & MF_SOURCE_READERF_CURRENTMEDIATYPECHANGED.0 as u32 != 0 {
@@ -224,11 +223,7 @@ impl Camera {
             if (len as usize) >= stride * h {
                 for y in 0..h {
                     let sy = if self.stride < 0 { h - 1 - y } else { y };
-                    std::ptr::copy_nonoverlapping(
-                        p.add(sy * stride),
-                        bgra.as_mut_ptr().add(y * row),
-                        row,
-                    );
+                    std::ptr::copy_nonoverlapping(p.add(sy * stride), bgra.as_mut_ptr().add(y * row), row);
                 }
             }
             let _ = buf.Unlock();

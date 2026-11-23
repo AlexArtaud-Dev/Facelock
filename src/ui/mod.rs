@@ -9,9 +9,7 @@ use crate::config::{Config, Trigger, Workflow};
 use crate::hotkey;
 use crate::ipc::{self, Cmd, FaceBox, FrameMeta, Reply, Req, Status};
 use crate::winutil;
-use eframe::egui::{
-    self, Align, Align2, Color32, FontId, Layout, RichText, Sense, Stroke, StrokeKind, Vec2,
-};
+use eframe::egui::{self, Align, Align2, Color32, FontId, Layout, RichText, Sense, Stroke, StrokeKind, Vec2};
 use flow::{Op, Sel};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
 use std::sync::{Arc, Mutex};
@@ -36,11 +34,7 @@ pub fn run(page: &str) {
         ..Default::default()
     };
     let page = page.to_string();
-    let _ = eframe::run_native(
-        "FaceLock",
-        opts,
-        Box::new(move |cc| Ok(Box::new(App::new(cc, &page)))),
-    );
+    let _ = eframe::run_native("FaceLock", opts, Box::new(move |cc| Ok(Box::new(App::new(cc, &page)))));
 }
 
 // ------------------------------------------------------------------ lien
@@ -85,12 +79,7 @@ fn link_thread(link: Arc<Mutex<Link>>, rx: Receiver<(Cmd, bool)>, ctx: egui::Con
                 } else {
                     250
                 };
-                (
-                    Duration::from_millis(p),
-                    l.want_frame,
-                    l.log_next,
-                    l.frame_seq,
-                )
+                (Duration::from_millis(p), l.want_frame, l.log_next, l.frame_seq)
             };
             match rx.recv_timeout(period) {
                 Ok((cmd, want_reply)) => {
@@ -222,6 +211,8 @@ struct App {
     sel: Option<(u64, Sel)>,
     pending_test: Option<u64>,
     logo: Option<egui::TextureHandle>,
+    /// Saisie de raccourci dans la fenêtre (Linux)
+    rec_tx: Option<(Sender<String>, Instant)>,
 }
 
 fn page_from(name: &str) -> Page {
@@ -268,6 +259,7 @@ impl App {
             sel: None,
             pending_test: None,
             logo: None,
+            rec_tx: None,
         };
         app.refresh_cameras(&cc.egui_ctx);
         app.refresh_profiles();
@@ -294,10 +286,7 @@ impl App {
     }
 
     fn refresh_profiles(&mut self) {
-        self.profiles = crate::engine::list_profiles()
-            .into_iter()
-            .map(|(n, _)| n)
-            .collect();
+        self.profiles = crate::engine::list_profiles().into_iter().map(|(n, _)| n).collect();
     }
 
     fn save_now(&mut self) {
@@ -344,8 +333,7 @@ impl App {
 
     /// Synchronise l'état reçu du service (navigation, image, réponses).
     fn pump(&mut self, ctx: &egui::Context) {
-        let wants_video =
-            (self.page == Page::Dashboard && self.show_video) || self.enroll.is_some();
+        let wants_video = (self.page == Page::Dashboard && self.show_video) || self.enroll.is_some();
         let mut l = self.link.lock().unwrap();
         l.want_frame = wants_video;
         l.fast = self.enroll.is_some();
@@ -359,24 +347,21 @@ impl App {
         if let Some((meta, bin)) = l.frame.take() {
             if meta.seq != self.tex_seq && bin.len() == meta.w * meta.h * 4 {
                 let mut rgba = bin;
-                for px in rgba.chunks_exact_mut(4) {
+                for px in rgba.as_chunks_mut::<4>().0 {
                     px.swap(0, 2);
                     px[3] = 255;
                 }
                 let img = egui::ColorImage::from_rgba_unmultiplied([meta.w, meta.h], &rgba);
                 match &mut self.tex {
                     Some(t) => t.set(img, egui::TextureOptions::LINEAR),
-                    None => {
-                        self.tex =
-                            Some(ctx.load_texture("camera", img, egui::TextureOptions::LINEAR))
-                    }
+                    None => self.tex = Some(ctx.load_texture("camera", img, egui::TextureOptions::LINEAR)),
                 }
                 self.tex_seq = meta.seq;
                 self.faces = meta.faces;
                 self.frame_size = (meta.w, meta.h);
             }
         }
-        let replies: Vec<Reply> = l.replies.drain(..).collect();
+        let replies: Vec<Reply> = std::mem::take(&mut l.replies);
         drop(l);
         for r in replies {
             if let Some(en) = self.enroll.as_mut().filter(|e| e.saving) {
@@ -433,16 +418,93 @@ impl App {
         }
     }
 
+    /// Windows : capture globale (hook clavier temporaire, toutes les touches,
+    /// Win comprise). Linux : saisie dans la fenêtre (voir `capture_in_window`).
     fn start_recording(&mut self, ctx: &egui::Context, target: Rec) {
         self.send(Cmd::PauseHotkeys { paused: true });
         let (tx, rx) = mpsc::channel();
-        let ctx = ctx.clone();
-        std::thread::spawn(move || {
-            let _ = tx.send(winutil::record_combo());
-            ctx.request_repaint();
-        });
+        if cfg!(windows) {
+            let ctx = ctx.clone();
+            std::thread::spawn(move || {
+                let _ = tx.send(winutil::record_combo());
+                ctx.request_repaint();
+            });
+        } else {
+            self.rec_tx = Some((tx, Instant::now()));
+        }
         self.recording = Some((target, rx));
     }
+
+    /// Saisie d'un raccourci au clavier dans la fenêtre (Linux).
+    fn capture_in_window(&mut self, ctx: &egui::Context) {
+        let Some((tx, since)) = &self.rec_tx else { return };
+        if since.elapsed() > Duration::from_secs(10) {
+            let _ = tx.send(String::new());
+            self.rec_tx = None;
+            return;
+        }
+        let combo = ctx.input(|i| {
+            i.events.iter().find_map(|e| match e {
+                egui::Event::Key {
+                    key,
+                    pressed: true,
+                    modifiers,
+                    ..
+                } => {
+                    let name = egui_key_name(*key)?;
+                    let mut parts = Vec::new();
+                    if modifiers.ctrl {
+                        parts.push("ctrl".to_string());
+                    }
+                    if modifiers.alt {
+                        parts.push("alt".to_string());
+                    }
+                    if modifiers.shift {
+                        parts.push("shift".to_string());
+                    }
+                    parts.push(name);
+                    Some(parts.join("+"))
+                }
+                _ => None,
+            })
+        });
+        if let Some(c) = combo {
+            let _ = tx.send(c);
+            self.rec_tx = None;
+        } else {
+            ctx.request_repaint_after(Duration::from_millis(100));
+        }
+    }
+}
+
+/// Nom de touche egui -> nom FaceLock (« a », « f5 », « page up »…).
+fn egui_key_name(key: egui::Key) -> Option<String> {
+    use egui::Key;
+    let n = match key {
+        Key::Space => "space",
+        Key::Enter => "enter",
+        Key::Escape => "esc",
+        Key::Tab => "tab",
+        Key::Backspace => "backspace",
+        Key::Delete => "delete",
+        Key::Insert => "insert",
+        Key::Home => "home",
+        Key::End => "end",
+        Key::PageUp => "page up",
+        Key::PageDown => "page down",
+        Key::ArrowUp => "up",
+        Key::ArrowDown => "down",
+        Key::ArrowLeft => "left",
+        Key::ArrowRight => "right",
+        other => {
+            let name = other.name().to_lowercase();
+            // Lettres, chiffres, F1..F24
+            let valid = (name.len() == 1 && name.chars().all(|c| c.is_ascii_alphanumeric()))
+                || (name.starts_with('f') && name[1..].parse::<u32>().is_ok_and(|n| (1..=24).contains(&n)));
+            return valid.then_some(name);
+        }
+    };
+    Some(n.to_string())
 }
 
 impl Drop for App {
@@ -534,6 +596,7 @@ impl eframe::App for App {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         let ctx = ui.ctx().clone();
         theme::backdrop(&ctx);
+        self.capture_in_window(&ctx);
         self.pump(&ctx);
         let (connected, status) = {
             let l = self.link.lock().unwrap();
@@ -564,18 +627,16 @@ impl eframe::App for App {
                 bottom: 8,
             }))
             .show(ui, |ui| {
-                egui::ScrollArea::vertical()
-                    .auto_shrink([false, false])
-                    .show(ui, |ui| {
-                        ui.set_max_width(ui.available_width().min(1000.0));
-                        match self.page {
-                            Page::Dashboard => self.page_dashboard(ui, connected, &status),
-                            Page::Workflows => self.page_workflows(ui),
-                            Page::Faces => self.page_faces(ui, &status),
-                            Page::Settings => self.page_settings(ui),
-                        }
-                        ui.add_space(24.0);
-                    });
+                egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
+                    ui.set_max_width(ui.available_width().min(1000.0));
+                    match self.page {
+                        Page::Dashboard => self.page_dashboard(ui, connected, &status),
+                        Page::Workflows => self.page_workflows(ui),
+                        Page::Faces => self.page_faces(ui, &status),
+                        Page::Settings => self.page_settings(ui),
+                    }
+                    ui.add_space(24.0);
+                });
             });
 
         self.gallery_modal(&ctx);
@@ -611,26 +672,17 @@ impl App {
         let items = [
             (Page::Dashboard, I_DASH, "Tableau de bord", String::new()),
             (Page::Workflows, I_FLOW, "Workflows", active.to_string()),
-            (
-                Page::Faces,
-                I_FACE,
-                "Visages",
-                self.profiles.len().to_string(),
-            ),
+            (Page::Faces, I_FACE, "Visages", self.profiles.len().to_string()),
             (Page::Settings, I_SETTINGS, "Réglages", String::new()),
         ];
         for (page, ic, label, count) in items {
             let selected = self.page == page;
-            let (rect, resp) =
-                ui.allocate_exact_size(Vec2::new(ui.available_width(), 42.0), Sense::click());
+            let (rect, resp) = ui.allocate_exact_size(Vec2::new(ui.available_width(), 42.0), Sense::click());
             let p = ui.painter();
             if selected {
                 p.rect_filled(rect, 10.0, SURFACE2);
                 p.rect_filled(
-                    egui::Rect::from_min_size(
-                        rect.min + Vec2::new(0.0, 11.0),
-                        Vec2::new(3.0, 20.0),
-                    ),
+                    egui::Rect::from_min_size(rect.min + Vec2::new(0.0, 11.0), Vec2::new(3.0, 20.0)),
                     2.0,
                     ACCENT,
                 );
@@ -668,10 +720,7 @@ impl App {
                 p.rect_filled(r, 9.0, SURFACE3);
                 p.galley(r.min + Vec2::new(6.0, 2.0), g, MUTED);
             }
-            if resp
-                .on_hover_cursor(egui::CursorIcon::PointingHand)
-                .clicked()
-            {
+            if resp.on_hover_cursor(egui::CursorIcon::PointingHand).clicked() {
                 self.page = page;
             }
             ui.add_space(2.0);
@@ -712,10 +761,7 @@ impl App {
         // Bandeau d'état
         let hero = glass_frame(24)
             .fill(lerp_color(SURFACE, lk.color.gamma_multiply(0.25), 0.35))
-            .stroke(Stroke::new(
-                1.0,
-                lerp_color(BORDER, lk.color.gamma_multiply(0.5), 0.5),
-            ))
+            .stroke(Stroke::new(1.0, lerp_color(BORDER, lk.color.gamma_multiply(0.5), 0.5)))
             .inner_margin(26)
             .show(ui, |ui| {
                 ui.set_width(ui.available_width());
@@ -739,9 +785,7 @@ impl App {
                     });
                     ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                         if button(ui, Some(I_REFRESH), "Réinitialiser", Kind::Ghost, connected)
-                            .on_hover_text(
-                                "Annule les décomptes, lève la pause et relance la vérification",
-                            )
+                            .on_hover_text("Annule les décomptes, lève la pause et relance la vérification")
                             .clicked()
                         {
                             self.send(Cmd::Reset);
@@ -763,12 +807,7 @@ impl App {
         // Indicateurs
         let active = self.cfg.workflows.iter().filter(|w| w.enabled).count();
         let tiles = [
-            (
-                I_FACE,
-                "Visages enrôlés",
-                status.profiles.to_string(),
-                ACCENT,
-            ),
+            (I_FACE, "Visages enrôlés", status.profiles.to_string(), ACCENT),
             (
                 I_FLOW,
                 "Workflows actifs",
@@ -837,13 +876,7 @@ impl App {
             } else {
                 None
             };
-            video(
-                ui,
-                self.tex.as_ref(),
-                &self.faces,
-                self.frame_size,
-                placeholder,
-            );
+            video(ui, self.tex.as_ref(), &self.faces, self.frame_size, placeholder);
         });
         ui.add_space(14.0);
 
@@ -915,7 +948,9 @@ impl App {
                     ui.add_space(16.0);
                     ui.label(icon(I_FLOW, 34.0).color(VIOLET));
                     ui.label(h2("Aucun workflow"));
-                    ui.label(muted("Pars d'un modèle : verrouillage auto, anti-regard indiscret, panic button…"));
+                    ui.label(muted(
+                        "Pars d'un modèle : verrouillage auto, anti-regard indiscret, panic button…",
+                    ));
                     ui.add_space(8.0);
                     if button(ui, Some(I_ADD), "Choisir un modèle", Kind::Primary, true).clicked() {
                         self.gallery = true;
@@ -944,7 +979,9 @@ impl App {
         self.cfg.workflows = workflows;
         ui.horizontal(|ui| {
             ui.label(icon(I_INFO, 14.0).color(FAINT));
-            ui.label(small("Clique sur un bloc pour le modifier. Les changements sont enregistrés et appliqués automatiquement."));
+            ui.label(small(
+                "Clique sur un bloc pour le modifier. Les changements sont enregistrés et appliqués automatiquement.",
+            ));
         });
 
         let ctx = ui.ctx().clone();
@@ -982,16 +1019,20 @@ impl App {
         }
         let mut chosen = None;
         let mut close = false;
+        // Largeur et hauteur adaptées à la fenêtre : rien ne déborde.
+        let screen = ctx.content_rect();
+        let width = (screen.width() - 120.0).clamp(360.0, 780.0);
+        let cols = if width >= 600.0 { 2 } else { 1 };
+        let tile_w = (width - 12.0 * (cols as f32 - 1.0)) / cols as f32;
+        let list_h = (screen.height() - 260.0).max(200.0);
         let resp = egui::Modal::new(egui::Id::unique("gallery"))
             .frame(modal_frame())
             .show(ctx, |ui| {
-                ui.set_width(760.0);
+                ui.set_width(width);
                 ui.horizontal(|ui| {
                     ui.vertical(|ui| {
                         ui.label(h1("Nouveau workflow"));
-                        ui.label(muted(
-                            "Choisis un modèle, tu pourras tout personnaliser ensuite.",
-                        ));
+                        ui.label(muted("Choisis un modèle, tu pourras tout personnaliser ensuite."));
                     });
                     ui.with_layout(Layout::right_to_left(Align::Min), |ui| {
                         if icon_button(ui, I_CLOSE, "Fermer", MUTED).clicked() {
@@ -1001,66 +1042,68 @@ impl App {
                 });
                 ui.add_space(12.0);
                 egui::ScrollArea::vertical()
-                    .max_height(560.0)
+                    .max_height(list_h)
+                    .auto_shrink([false, true])
                     .show(ui, |ui| {
-                        egui::Grid::new("presets")
-                            .num_columns(2)
-                            .spacing(Vec2::new(12.0, 12.0))
-                            .show(ui, |ui| {
-                                for (i, preset) in flow::PRESETS.iter().enumerate() {
+                        // Rangées de `cols` tuiles ; chaque tuile empile son contenu verticalement
+                        // et toutes les tuiles d'une rangée prennent la hauteur de la plus haute.
+                        for (row, presets) in flow::PRESETS.chunks(cols).enumerate() {
+                            let row_h = ui
+                                .ctx()
+                                .data(|d| d.get_temp::<f32>(egui::Id::unique(("preset-row", row))));
+                            let mut tallest: f32 = 0.0;
+                            ui.horizontal_top(|ui| {
+                                ui.spacing_mut().item_spacing.x = 12.0;
+                                for (j, preset) in presets.iter().enumerate() {
                                     let wf = (preset.build)();
                                     let meta = flow::trigger_meta(&wf.trigger);
-                                    let (rect, resp) = ui.allocate_exact_size(
-                                        Vec2::new(368.0, 128.0),
-                                        Sense::click(),
-                                    );
-                                    let p = ui.painter();
-                                    let hovered = resp.hovered();
-                                    p.rect(
-                                        rect,
-                                        16.0,
-                                        if hovered { SURFACE3 } else { SURFACE2 },
-                                        Stroke::new(
+                                    let id = egui::Id::unique(("preset", row * cols + j));
+                                    let hovered = ui.ctx().read_response(id).is_some_and(|r| r.hovered());
+                                    let tile = egui::Frame::new()
+                                        .fill(if hovered { SURFACE3 } else { SURFACE2 })
+                                        .stroke(Stroke::new(
                                             if hovered { 1.5 } else { 1.0 },
                                             if hovered { meta.color } else { BORDER },
-                                        ),
-                                        StrokeKind::Inside,
-                                    );
-                                    let mut child = ui.new_child(
-                                        egui::UiBuilder::new()
-                                            .max_rect(rect.shrink(16.0))
-                                            .layout(Layout::top_down(Align::Min)),
-                                    );
-                                    child.horizontal(|ui| {
-                                        let (r, _) = ui
-                                            .allocate_exact_size(Vec2::splat(34.0), Sense::hover());
-                                        icon_disc(
-                                            ui.painter(),
-                                            r.center(),
-                                            17.0,
-                                            meta.color,
-                                            meta.icon,
-                                        );
-                                        ui.label(
-                                            RichText::new(preset.title)
-                                                .family(semibold())
-                                                .size(15.0),
-                                        );
-                                    });
-                                    child.label(RichText::new(preset.desc).size(13.0).color(MUTED));
-                                    child.add_space(2.0);
-                                    flow::mini_flow(&mut child, &wf);
-                                    if resp
-                                        .on_hover_cursor(egui::CursorIcon::PointingHand)
-                                        .clicked()
-                                    {
-                                        chosen = Some(wf);
-                                    }
-                                    if i % 2 == 1 {
-                                        ui.end_row();
+                                        ))
+                                        .corner_radius(16)
+                                        .inner_margin(16)
+                                        .show(ui, |ui| {
+                                            ui.set_width(tile_w - 32.0);
+                                            ui.set_min_height(row_h.unwrap_or(0.0));
+                                            ui.vertical(|ui| {
+                                                ui.horizontal(|ui| {
+                                                    let (r, _) =
+                                                        ui.allocate_exact_size(Vec2::splat(34.0), Sense::hover());
+                                                    icon_disc(ui.painter(), r.center(), 17.0, meta.color, meta.icon);
+                                                    ui.label(RichText::new(preset.title).family(semibold()).size(15.0));
+                                                });
+                                                ui.add(
+                                                    egui::Label::new(
+                                                        RichText::new(preset.desc).size(13.0).color(MUTED),
+                                                    )
+                                                    .wrap(),
+                                                );
+                                                ui.add_space(4.0);
+                                                flow::mini_flow(ui, &wf);
+                                            })
+                                            .response
+                                            .rect
+                                            .height()
+                                        });
+                                    tallest = tallest.max(tile.inner);
+                                    let resp = ui.interact(tile.response.rect, id, Sense::click());
+                                    if resp.on_hover_cursor(egui::CursorIcon::PointingHand).clicked() {
+                                        chosen = Some(wf.clone());
                                     }
                                 }
                             });
+                            if row_h != Some(tallest) {
+                                ui.ctx()
+                                    .data_mut(|d| d.insert_temp(egui::Id::unique(("preset-row", row)), tallest));
+                                ui.ctx().request_repaint();
+                            }
+                            ui.add_space(12.0);
+                        }
                     });
             });
         if resp.should_close() || close {
@@ -1087,11 +1130,16 @@ impl App {
             return;
         }
         let mut add = false;
-        page_header(ui, "Visages", "Seuls ces visages comptent comme « toi ». Aucune photo n'est stockée, uniquement des empreintes.", |ui| {
-            if button(ui, Some(I_ADD), "Ajouter un visage", Kind::Primary, true).clicked() {
-                add = true;
-            }
-        });
+        page_header(
+            ui,
+            "Visages",
+            "Seuls ces visages comptent comme « toi ». Aucune photo n'est stockée, uniquement des empreintes.",
+            |ui| {
+                if button(ui, Some(I_ADD), "Ajouter un visage", Kind::Primary, true).clicked() {
+                    add = true;
+                }
+            },
+        );
         if add {
             self.enroll = Some(EnrollUi {
                 name: String::new(),
@@ -1109,9 +1157,7 @@ impl App {
                     ui.add_space(18.0);
                     ui.label(icon(I_FACE, 36.0).color(ACCENT));
                     ui.label(h2("Aucun visage enrôlé"));
-                    ui.label(muted(
-                        "12 captures sous différents angles, environ une minute.",
-                    ));
+                    ui.label(muted("12 captures sous différents angles, environ une minute."));
                     ui.add_space(18.0);
                 });
             });
@@ -1123,20 +1169,13 @@ impl App {
             for name in self.profiles.clone() {
                 let (rect, _) = ui.allocate_exact_size(Vec2::new(w, 92.0), Sense::hover());
                 let p = ui.painter();
-                p.rect(
-                    rect,
-                    18.0,
-                    SURFACE,
-                    Stroke::new(1.0, BORDER),
-                    StrokeKind::Inside,
-                );
+                p.rect(rect, 18.0, SURFACE, Stroke::new(1.0, BORDER), StrokeKind::Inside);
                 sheen(p, rect, 18.0);
                 let hue = name
                     .bytes()
                     .fold(0u32, |a, b| a.wrapping_mul(31).wrapping_add(b as u32))
                     % 360;
-                let color: Color32 =
-                    egui::ecolor::Hsva::new(hue as f32 / 360.0, 0.55, 0.9, 1.0).into();
+                let color: Color32 = egui::ecolor::Hsva::new(hue as f32 / 360.0, 0.55, 0.9, 1.0).into();
                 let c = egui::pos2(rect.left() + 46.0, rect.center().y);
                 p.circle_filled(c, 26.0, color.gamma_multiply(0.25));
                 let initials: String = name
@@ -1145,13 +1184,7 @@ impl App {
                     .take(2)
                     .collect::<String>()
                     .to_uppercase();
-                p.text(
-                    c,
-                    Align2::CENTER_CENTER,
-                    initials,
-                    FontId::new(17.0, semibold()),
-                    color,
-                );
+                p.text(c, Align2::CENTER_CENTER, initials, FontId::new(17.0, semibold()), color);
                 p.text(
                     egui::pos2(rect.left() + 86.0, rect.center().y - 10.0),
                     Align2::LEFT_CENTER,
@@ -1166,10 +1199,8 @@ impl App {
                     FontId::proportional(12.5),
                     MUTED,
                 );
-                let br = egui::Rect::from_center_size(
-                    egui::pos2(rect.right() - 30.0, rect.center().y),
-                    Vec2::splat(32.0),
-                );
+                let br =
+                    egui::Rect::from_center_size(egui::pos2(rect.right() - 30.0, rect.center().y), Vec2::splat(32.0));
                 let mut child = ui.new_child(egui::UiBuilder::new().max_rect(br));
                 if icon_button(&mut child, I_DELETE, "Supprimer", RED).clicked() {
                     self.confirm = Some(Confirm::Profile(name.clone()));
@@ -1207,13 +1238,7 @@ impl App {
             } else {
                 None
             };
-            video(
-                ui,
-                self.tex.as_ref(),
-                &self.faces,
-                self.frame_size,
-                placeholder,
-            );
+            video(ui, self.tex.as_ref(), &self.faces, self.frame_size, placeholder);
             ui.add_space(12.0);
             // Progression : une pastille par capture
             ui.horizontal(|ui| {
@@ -1232,9 +1257,7 @@ impl App {
                     ui.painter().rect_filled(r, 4.0, c);
                 }
                 ui.add_space(8.0);
-                ui.label(
-                    RichText::new(format!("{} / {TARGET_SAMPLES}", info.count)).family(semibold()),
-                );
+                ui.label(RichText::new(format!("{} / {TARGET_SAMPLES}", info.count)).family(semibold()));
                 ui.add_space(8.0);
                 if info.several {
                     ui.label(RichText::new("Un seul visage à la fois").color(RED));
@@ -1246,15 +1269,7 @@ impl App {
             });
             ui.add_space(10.0);
             ui.horizontal(|ui| {
-                if button(
-                    ui,
-                    Some(I_VIDEO),
-                    "Capturer  (Espace)",
-                    Kind::Primary,
-                    info.face_ok,
-                )
-                .clicked()
-                {
+                if button(ui, Some(I_VIDEO), "Capturer  (Espace)", Kind::Primary, info.face_ok).clicked() {
                     capture = true;
                 }
                 let saving = self.enroll.as_ref().is_some_and(|e| e.saving);
@@ -1274,7 +1289,9 @@ impl App {
                 ui.label(RichText::new(err).color(RED));
             }
             ui.add_space(6.0);
-            ui.label(small("Conseils : face, léger profil gauche et droite, avec et sans lunettes. 5 captures minimum."));
+            ui.label(small(
+                "Conseils : face, léger profil gauche et droite, avec et sans lunettes. 5 captures minimum.",
+            ));
         });
         let typing = ui.ctx().memory(|m| m.focused().is_some());
         if !typing && ui.input(|i| i.key_pressed(egui::Key::Space)) {
@@ -1291,9 +1308,7 @@ impl App {
                 en.saving = true;
                 let _ = self.tx.send((Cmd::EnrollSave { name }, true));
             } else {
-                en.error = Some(
-                    "Nom invalide : lettres, chiffres, espaces, tirets ; 32 caractères max.".into(),
-                );
+                en.error = Some("Nom invalide : lettres, chiffres, espaces, tirets ; 32 caractères max.".into());
             }
         }
         if cancel {
@@ -1338,10 +1353,7 @@ impl App {
                 .selected_text(current)
                 .show_ui(ui, |ui| {
                     for (i, name) in self.cameras.clone().into_iter().enumerate() {
-                        if ui
-                            .selectable_label(self.cfg.camera_index == i, &name)
-                            .clicked()
-                        {
+                        if ui.selectable_label(self.cfg.camera_index == i, &name).clicked() {
                             self.cfg.camera_index = i;
                             self.cfg.camera_name = name;
                         }
@@ -1409,11 +1421,7 @@ impl App {
                 if button(
                     ui,
                     None,
-                    if combo.is_empty() {
-                        "Définir"
-                    } else {
-                        "Modifier"
-                    },
+                    if combo.is_empty() { "Définir" } else { "Modifier" },
                     Kind::Ghost,
                     free,
                 )
@@ -1426,9 +1434,7 @@ impl App {
                 } else if combo.is_empty() {
                     ui.label(muted("non défini"));
                 } else {
-                    ui.with_layout(Layout::left_to_right(Align::Center), |ui| {
-                        keycaps(ui, &combo)
-                    });
+                    ui.with_layout(Layout::left_to_right(Align::Center), |ui| keycaps(ui, &combo));
                 }
             });
             if start {
@@ -1442,7 +1448,7 @@ impl App {
             ui,
             I_BELL,
             "Notifier ces raccourcis",
-            "Affiche une notification Windows à chaque pause / réinitialisation",
+            "Affiche une notification système à chaque pause / réinitialisation",
             |ui| {
                 let mut on = self.cfg.notifications.toggle && self.cfg.notifications.reset;
                 if toggle(ui, &mut on).changed() {
@@ -1459,7 +1465,7 @@ impl App {
             ui,
             I_POWER,
             "Lancer à l'ouverture de session",
-            "FaceLock démarre discrètement avec Windows",
+            "FaceLock démarre discrètement avec ta session",
             |ui| {
                 auto_changed = toggle(ui, &mut auto).changed();
             },
@@ -1471,16 +1477,15 @@ impl App {
                 self.toast("Impossible de modifier le démarrage automatique", false);
             }
         }
+        let dir = crate::config::data_dir();
         setting_row(
             ui,
             I_FOLDER,
             "Données",
-            "%APPDATA%\\FaceLock — config et empreintes, rien ne sort de ta machine",
+            &format!("{} — config et empreintes, rien ne sort de ta machine", dir.display()),
             |ui| {
                 if button(ui, None, "Ouvrir le dossier", Kind::Ghost, true).clicked() {
-                    let _ = std::process::Command::new("explorer")
-                        .arg(crate::config::data_dir())
-                        .spawn();
+                    winutil::open_folder(&dir);
                 }
             },
         );
@@ -1507,15 +1512,8 @@ impl App {
                     .into_iter()
                     .map(|e| {
                         let tex = e.icon.map(|rgba| {
-                            let img = egui::ColorImage::from_rgba_unmultiplied(
-                                [winutil::ICON, winutil::ICON],
-                                &rgba,
-                            );
-                            ctx.load_texture(
-                                format!("ico-{}", e.name),
-                                img,
-                                egui::TextureOptions::LINEAR,
-                            )
+                            let img = egui::ColorImage::from_rgba_unmultiplied([winutil::ICON, winutil::ICON], &rgba);
+                            ctx.load_texture(format!("ico-{}", e.name), img, egui::TextureOptions::LINEAR)
                         });
                         (e.name, tex)
                     })
@@ -1548,13 +1546,13 @@ impl App {
                         if p.rx.is_some() {
                             ui.label(small("Chargement…"));
                         }
-                        for (name, tex) in p.items.iter().filter(|(n, _)| {
-                            needle.is_empty() || n.to_lowercase().contains(&needle)
-                        }) {
-                            let (rect, resp) = ui.allocate_exact_size(
-                                Vec2::new(ui.available_width(), 36.0),
-                                Sense::click(),
-                            );
+                        for (name, tex) in p
+                            .items
+                            .iter()
+                            .filter(|(n, _)| needle.is_empty() || n.to_lowercase().contains(&needle))
+                        {
+                            let (rect, resp) =
+                                ui.allocate_exact_size(Vec2::new(ui.available_width(), 36.0), Sense::click());
                             if resp.hovered() {
                                 ui.painter().rect_filled(rect, 8.0, SURFACE3);
                             }
@@ -1566,10 +1564,7 @@ impl App {
                                 ui.painter().image(
                                     t.id(),
                                     ir,
-                                    egui::Rect::from_min_max(
-                                        egui::pos2(0.0, 0.0),
-                                        egui::pos2(1.0, 1.0),
-                                    ),
+                                    egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)),
                                     Color32::WHITE,
                                 );
                             } else {
@@ -1582,10 +1577,7 @@ impl App {
                                 FontId::proportional(14.0),
                                 TEXT,
                             );
-                            if resp
-                                .on_hover_cursor(egui::CursorIcon::PointingHand)
-                                .clicked()
-                            {
+                            if resp.on_hover_cursor(egui::CursorIcon::PointingHand).clicked() {
                                 chosen = Some(name.clone());
                             }
                         }
@@ -1631,11 +1623,7 @@ impl App {
                 "Supprimer le workflow".to_string(),
                 format!(
                     "« {} » sera supprimé.",
-                    self.cfg
-                        .workflows
-                        .get(*i)
-                        .map(|w| w.name.as_str())
-                        .unwrap_or("?")
+                    self.cfg.workflows.get(*i).map(|w| w.name.as_str()).unwrap_or("?")
                 ),
             ),
         };
@@ -1660,9 +1648,7 @@ impl App {
         if yes {
             match self.confirm.take() {
                 Some(Confirm::Profile(name)) => {
-                    match std::fs::remove_file(
-                        crate::config::faces_dir().join(format!("{name}.face")),
-                    ) {
+                    match std::fs::remove_file(crate::config::faces_dir().join(format!("{name}.face"))) {
                         Ok(()) => {
                             self.send(Cmd::ReloadProfiles);
                             self.toast(format!("Profil « {name} » supprimé"), true);
@@ -1671,12 +1657,11 @@ impl App {
                     }
                     self.refresh_profiles();
                 }
-                Some(Confirm::Workflow(i)) => {
-                    if i < self.cfg.workflows.len() {
-                        self.cfg.workflows.remove(i);
-                        self.sel = None;
-                    }
+                Some(Confirm::Workflow(i)) if i < self.cfg.workflows.len() => {
+                    self.cfg.workflows.remove(i);
+                    self.sel = None;
                 }
+                Some(Confirm::Workflow(_)) => {}
                 None => {}
             }
         } else if no || resp.should_close() {
@@ -1719,11 +1704,7 @@ impl App {
                     })
                     .show(ui, |ui| {
                         ui.horizontal(|ui| {
-                            ui.label(icon(if ok { I_CHECK } else { I_WARN }, 15.0).color(if ok {
-                                GREEN
-                            } else {
-                                RED
-                            }));
+                            ui.label(icon(if ok { I_CHECK } else { I_WARN }, 15.0).color(if ok { GREEN } else { RED }));
                             ui.label(RichText::new(msg).color(TEXT));
                         });
                     });
@@ -1776,10 +1757,7 @@ fn video(
     match (placeholder, tex) {
         (None, Some(tex)) => {
             let uv = egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0));
-            painter.add(
-                egui::epaint::RectShape::filled(rect, 14.0, Color32::WHITE)
-                    .with_texture(tex.id(), uv),
-            );
+            painter.add(egui::epaint::RectShape::filled(rect, 14.0, Color32::WHITE).with_texture(tex.id(), uv));
             let sx = w / size.0 as f32;
             let sy = h / size.1 as f32;
             for f in faces {
@@ -1794,12 +1772,8 @@ fn video(
                     Some(n) => format!("{n}  {:.0} %", f.score * 100.0),
                     None => format!("Inconnu  {:.0} %", f.score.max(0.0) * 100.0),
                 };
-                let galley =
-                    painter.layout_no_wrap(text, FontId::new(12.5, semibold()), Color32::WHITE);
-                let pos = egui::pos2(
-                    r.min.x,
-                    (r.min.y - galley.size().y - 10.0).max(rect.min.y + 4.0),
-                );
+                let galley = painter.layout_no_wrap(text, FontId::new(12.5, semibold()), Color32::WHITE);
+                let pos = egui::pos2(r.min.x, (r.min.y - galley.size().y - 10.0).max(rect.min.y + 4.0));
                 let bg = egui::Rect::from_min_size(pos, galley.size() + Vec2::new(14.0, 6.0));
                 painter.rect_filled(bg, 8.0, color);
                 painter.galley(pos + Vec2::new(7.0, 3.0), galley, Color32::WHITE);

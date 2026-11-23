@@ -3,7 +3,7 @@
 use crate::config::Config;
 use crate::ipc::{EnrollInfo, FaceBox};
 use std::collections::VecDeque;
-use std::sync::atomic::{AtomicBool, AtomicIsize, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::mpsc::Sender;
 use std::sync::{Arc, Mutex, RwLock};
 use std::time::Instant;
@@ -47,7 +47,6 @@ pub struct Shared {
     pub frame_wanted: Mutex<Option<Instant>>,
     pub enroll: Mutex<Option<EnrollInfo>>,
     pub nav: Mutex<Option<String>>,
-    pub tray_hwnd: AtomicIsize,
     pub mon_tx: Mutex<Sender<MonCmd>>,
 }
 
@@ -68,7 +67,6 @@ impl Shared {
             frame_wanted: Mutex::new(None),
             enroll: Mutex::new(None),
             nav: Mutex::new(None),
-            tray_hwnd: AtomicIsize::new(0),
             mon_tx: Mutex::new(mon_tx),
         })
     }
@@ -106,6 +104,14 @@ impl Shared {
         self.cfg.read().unwrap().clone()
     }
 
+    /// Verrouillage / déverrouillage de session (événement système).
+    pub fn set_locked(&self, locked: bool) {
+        if self.locked.swap(locked, Ordering::SeqCst) != locked && !locked {
+            self.log("Session déverrouillée");
+        }
+        self.send(MonCmd::Wake);
+    }
+
     pub fn set_suspended(&self, s: bool) {
         self.suspended.store(s, Ordering::SeqCst);
         self.log(if s {
@@ -119,6 +125,17 @@ impl Shared {
 }
 
 pub fn now_hms() -> String {
-    let t = unsafe { windows::Win32::System::SystemInformation::GetLocalTime() };
-    format!("{:02}:{:02}:{:02}", t.wHour, t.wMinute, t.wSecond)
+    chrono::Local::now().format("%H:%M:%S").to_string()
+}
+
+/// Info-bulle de l'icône de notification.
+pub fn tray_tip(s: &Shared) -> String {
+    if s.suspended.load(Ordering::SeqCst) {
+        "FaceLock — en pause"
+    } else if s.camera_active.load(Ordering::SeqCst) {
+        "FaceLock — protection active"
+    } else {
+        "FaceLock — en veille"
+    }
+    .to_string()
 }

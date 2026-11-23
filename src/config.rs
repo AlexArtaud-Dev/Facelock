@@ -163,9 +163,7 @@ impl Trigger {
                 when: StrangerWhen::Always,
             },
             "return" => Trigger::Return { min_absence: 10.0 },
-            "hotkey" => Trigger::Hotkey {
-                combo: String::new(),
-            },
+            "hotkey" => Trigger::Hotkey { combo: String::new() },
             _ => Trigger::Absence { grace: 30.0 },
         }
     }
@@ -260,11 +258,20 @@ impl Default for Config {
     }
 }
 
+/// %APPDATA%\FaceLock (Windows) ou $XDG_CONFIG_HOME/facelock (Linux).
 pub fn data_dir() -> PathBuf {
-    let base = std::env::var_os("APPDATA")
+    #[cfg(windows)]
+    let dir = std::env::var_os("APPDATA")
         .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from("."));
-    let dir = base.join("FaceLock");
+        .unwrap_or_else(|| PathBuf::from("."))
+        .join("FaceLock");
+    #[cfg(not(windows))]
+    let dir = std::env::var_os("XDG_CONFIG_HOME")
+        .map(PathBuf::from)
+        .filter(|p| p.is_absolute())
+        .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".config")))
+        .unwrap_or_else(|| PathBuf::from("."))
+        .join("facelock");
     let _ = std::fs::create_dir_all(&dir);
     dir
 }
@@ -322,9 +329,7 @@ impl Config {
             Workflow {
                 name: "Verrouillage automatique".into(),
                 enabled: t.absence.enabled,
-                trigger: Trigger::Absence {
-                    grace: t.absence.grace,
-                },
+                trigger: Trigger::Absence { grace: t.absence.grace },
                 actions: t.absence.actions,
                 ..Workflow::default()
             },
