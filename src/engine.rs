@@ -101,7 +101,11 @@ fn iou(a: &[f32; 4], b: &[f32; 4]) -> f32 {
     let y2 = (a[1] + a[3]).min(b[1] + b[3]);
     let inter = (x2 - x1).max(0.0) * (y2 - y1).max(0.0);
     let union = a[2] * a[3] + b[2] * b[3] - inter;
-    if union <= 0.0 { 0.0 } else { inter / union }
+    if union <= 0.0 {
+        0.0
+    } else {
+        inter / union
+    }
 }
 
 pub fn box_iou(a: &[f32; 4], b: &[f32; 4]) -> f32 {
@@ -117,7 +121,11 @@ fn normalize(v: &mut [f32]) {
 
 impl Engine {
     pub fn new() -> TractResult<Self> {
-        let mut e = Engine { detector: None, recognizer: load_recognizer()?, profiles: Vec::new() };
+        let mut e = Engine {
+            detector: None,
+            recognizer: load_recognizer()?,
+            profiles: Vec::new(),
+        };
         e.reload_profiles();
         Ok(e)
     }
@@ -144,7 +152,12 @@ impl Engine {
             let fy = ((y as f32 + 0.5) * sy - 0.5).max(0.0);
             for x in 0..dw {
                 let fx = ((x as f32 + 0.5) * sx - 0.5).max(0.0);
-                sample_bilinear(f, fx.min(f.w as f32 - 1.0), fy.min(f.h as f32 - 1.0), &mut px);
+                sample_bilinear(
+                    f,
+                    fx.min(f.w as f32 - 1.0),
+                    fy.min(f.h as f32 - 1.0),
+                    &mut px,
+                );
                 let i = y * pw + x;
                 input[i] = px[0];
                 input[plane + i] = px[1];
@@ -209,9 +222,15 @@ impl Engine {
             [41.5493, 92.3655],
             [70.7299, 92.2041],
         ];
-        let src: Vec<[f32; 2]> = (0..5).map(|i| [face.landmarks[2 * i], face.landmarks[2 * i + 1]]).collect();
-        let ms = src.iter().fold([0.0; 2], |a, p| [a[0] + p[0] / 5.0, a[1] + p[1] / 5.0]);
-        let md = DST.iter().fold([0.0; 2], |a, p| [a[0] + p[0] / 5.0, a[1] + p[1] / 5.0]);
+        let src: Vec<[f32; 2]> = (0..5)
+            .map(|i| [face.landmarks[2 * i], face.landmarks[2 * i + 1]])
+            .collect();
+        let ms = src
+            .iter()
+            .fold([0.0; 2], |a, p| [a[0] + p[0] / 5.0, a[1] + p[1] / 5.0]);
+        let md = DST
+            .iter()
+            .fold([0.0; 2], |a, p| [a[0] + p[0] / 5.0, a[1] + p[1] / 5.0]);
         let (mut num_a, mut num_b, mut den) = (0f32, 0f32, 0f32);
         for i in 0..5 {
             let (sx, sy) = (src[i][0] - ms[0], src[i][1] - ms[1]);
@@ -329,7 +348,9 @@ fn read_profile(path: &Path) -> Option<Vec<[f32; EMB]>> {
 pub fn valid_profile_name(name: &str) -> bool {
     let n = name.chars().count();
     (1..=32).contains(&n)
-        && name.chars().all(|c| c.is_alphanumeric() || c == ' ' || c == '-' || c == '_')
+        && name
+            .chars()
+            .all(|c| c.is_alphanumeric() || c == ' ' || c == '-' || c == '_')
         && !name.starts_with(' ')
         && !name.ends_with(' ')
 }
@@ -343,5 +364,8 @@ pub fn write_profile(name: &str, embeddings: &[[f32; EMB]]) -> std::io::Result<(
             data.extend_from_slice(&v.to_le_bytes());
         }
     }
-    std::fs::write(crate::config::faces_dir().join(format!("{name}.face")), data)
+    std::fs::write(
+        crate::config::faces_dir().join(format!("{name}.face")),
+        data,
+    )
 }

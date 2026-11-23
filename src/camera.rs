@@ -23,7 +23,10 @@ fn devices() -> windows::core::Result<Vec<IMFActivate>> {
         let mut attrs = None;
         MFCreateAttributes(&mut attrs, 1)?;
         let attrs = attrs.unwrap();
-        attrs.SetGUID(&MF_DEVSOURCE_ATTRIBUTE_SOURCE_TYPE, &MF_DEVSOURCE_ATTRIBUTE_SOURCE_TYPE_VIDCAP_GUID)?;
+        attrs.SetGUID(
+            &MF_DEVSOURCE_ATTRIBUTE_SOURCE_TYPE,
+            &MF_DEVSOURCE_ATTRIBUTE_SOURCE_TYPE_VIDCAP_GUID,
+        )?;
         let mut ptr: *mut Option<IMFActivate> = std::ptr::null_mut();
         let mut count = 0u32;
         MFEnumDeviceSources(&attrs, &mut ptr, &mut count)?;
@@ -44,7 +47,9 @@ fn friendly_name(a: &IMFActivate) -> String {
     unsafe {
         let mut p = PWSTR::null();
         let mut len = 0u32;
-        if a.GetAllocatedString(&MF_DEVSOURCE_ATTRIBUTE_FRIENDLY_NAME, &mut p, &mut len).is_ok() {
+        if a.GetAllocatedString(&MF_DEVSOURCE_ATTRIBUTE_FRIENDLY_NAME, &mut p, &mut len)
+            .is_ok()
+        {
             let s = p.to_string().unwrap_or_default();
             CoTaskMemFree(Some(p.0 as *const _));
             s
@@ -56,7 +61,9 @@ fn friendly_name(a: &IMFActivate) -> String {
 
 /// Noms des webcams, dans l'ordre des index.
 pub fn list_cameras() -> Vec<String> {
-    devices().map(|d| d.iter().map(friendly_name).collect()).unwrap_or_default()
+    devices()
+        .map(|d| d.iter().map(friendly_name).collect())
+        .unwrap_or_default()
 }
 
 pub struct Camera {
@@ -76,7 +83,9 @@ impl Camera {
             .iter()
             .position(|d| !name.is_empty() && friendly_name(d) == name)
             .unwrap_or(index);
-        let act = devs.get(pos).ok_or_else(|| windows::core::Error::from(MF_E_NOT_FOUND))?;
+        let act = devs
+            .get(pos)
+            .ok_or_else(|| windows::core::Error::from(MF_E_NOT_FOUND))?;
         let cam_name = friendly_name(act);
         unsafe {
             let source: IMFMediaSource = act.ActivateObject()?;
@@ -91,7 +100,14 @@ impl Camera {
                     return Err(e);
                 }
             };
-            let mut cam = Camera { source, reader, w: 0, h: 0, stride: 0, name: cam_name };
+            let mut cam = Camera {
+                source,
+                reader,
+                w: 0,
+                h: 0,
+                stride: 0,
+                name: cam_name,
+            };
             cam.configure(want)?;
             Ok(cam)
         }
@@ -108,7 +124,9 @@ impl Camera {
         let mut i = 0;
         while let Ok(mt) = r.GetNativeMediaType(FIRST_VIDEO, i) {
             i += 1;
-            let Ok(size) = mt.GetUINT64(&MF_MT_FRAME_SIZE) else { continue };
+            let Ok(size) = mt.GetUINT64(&MF_MT_FRAME_SIZE) else {
+                continue;
+            };
             let (w, h) = ((size >> 32) as i64, (size & 0xFFFF_FFFF) as i64);
             let sub = mt.GetGUID(&MF_MT_SUBTYPE).unwrap_or(GUID::zeroed());
             let fps = mt
@@ -154,8 +172,18 @@ impl Camera {
             for _ in 0..50 {
                 let mut flags = 0u32;
                 let mut sample: Option<IMFSample> = None;
-                self.reader.ReadSample(FIRST_VIDEO, 0, None, Some(&mut flags), None, Some(&mut sample))?;
-                if flags & (MF_SOURCE_READERF_ERROR.0 as u32 | MF_SOURCE_READERF_ENDOFSTREAM.0 as u32) != 0 {
+                self.reader.ReadSample(
+                    FIRST_VIDEO,
+                    0,
+                    None,
+                    Some(&mut flags),
+                    None,
+                    Some(&mut sample),
+                )?;
+                if flags
+                    & (MF_SOURCE_READERF_ERROR.0 as u32 | MF_SOURCE_READERF_ENDOFSTREAM.0 as u32)
+                    != 0
+                {
                     return Err(windows::core::Error::from(MF_E_INVALIDREQUEST));
                 }
                 if flags & MF_SOURCE_READERF_CURRENTMEDIATYPECHANGED.0 as u32 != 0 {
@@ -196,7 +224,11 @@ impl Camera {
             if (len as usize) >= stride * h {
                 for y in 0..h {
                     let sy = if self.stride < 0 { h - 1 - y } else { y };
-                    std::ptr::copy_nonoverlapping(p.add(sy * stride), bgra.as_mut_ptr().add(y * row), row);
+                    std::ptr::copy_nonoverlapping(
+                        p.add(sy * stride),
+                        bgra.as_mut_ptr().add(y * row),
+                        row,
+                    );
                 }
             }
             let _ = buf.Unlock();
