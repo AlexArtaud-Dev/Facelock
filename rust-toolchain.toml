@@ -1,0 +1,5 @@
+# Même compilateur en local et en CI (lints clippy identiques).
+[toolchain]
+channel = "1.100.0"
+components = ["rustfmt", "clippy"]
+profile = "minimal"

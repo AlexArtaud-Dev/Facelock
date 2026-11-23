@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=FaceLock
+GenericName=Verrouillage par reconnaissance faciale
+Comment=Verrouille ou masque l'écran quand tu t'absentes ou qu'un inconnu regarde
+Exec=facelock
+Icon=facelock
+Terminal=false
+Categories=Utility;Security;
+Keywords=lock;face;webcam;privacy;verrouillage;visage;
+StartupNotify=false

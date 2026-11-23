@@ -1,10 +1,16 @@
-; Inno Setup 6 — génère Output\FaceLock-Setup.exe
+; Inno Setup 6 — génère <OutputDir>\FaceLock-Setup-<version>.exe
+;   ISCC /DAppVersion=x.y.z /DOutputDir=dist installer.iss   (voir scripts/package.sh)
 ; Même AppId que la version Python : l'installation se met à jour sur place.
 ; Installation PAR UTILISATEUR (pas d'UAC) dans %LocalAppData%\Programs\FaceLock.
 ; Les données (config, visages) vivent dans %AppData%\FaceLock.
 
 #define AppName "FaceLock"
-#define AppVersion "2.0.0"
+#ifndef AppVersion
+  #define AppVersion "0.0.0-dev"
+#endif
+#ifndef OutputDir
+  #define OutputDir "Output"
+#endif
 #define AppExe "FaceLock.exe"
 
 [Setup]
@@ -15,7 +21,8 @@ AppPublisher=AlexArtaud-Dev
 DefaultDirName={localappdata}\Programs\{#AppName}
 DisableProgramGroupPage=yes
 PrivilegesRequired=lowest
-OutputBaseFilename={#AppName}-Setup
+OutputDir={#OutputDir}
+OutputBaseFilename={#AppName}-Setup-{#AppVersion}
 SetupIconFile=assets\facelock.ico
 UninstallDisplayIcon={app}\{#AppExe}
 Compression=lzma2/ultra64
