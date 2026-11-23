@@ -152,12 +152,7 @@ impl Engine {
             let fy = ((y as f32 + 0.5) * sy - 0.5).max(0.0);
             for x in 0..dw {
                 let fx = ((x as f32 + 0.5) * sx - 0.5).max(0.0);
-                sample_bilinear(
-                    f,
-                    fx.min(f.w as f32 - 1.0),
-                    fy.min(f.h as f32 - 1.0),
-                    &mut px,
-                );
+                sample_bilinear(f, fx.min(f.w as f32 - 1.0), fy.min(f.h as f32 - 1.0), &mut px);
                 let i = y * pw + x;
                 input[i] = px[0];
                 input[plane + i] = px[1];
@@ -225,12 +220,8 @@ impl Engine {
         let src: Vec<[f32; 2]> = (0..5)
             .map(|i| [face.landmarks[2 * i], face.landmarks[2 * i + 1]])
             .collect();
-        let ms = src
-            .iter()
-            .fold([0.0; 2], |a, p| [a[0] + p[0] / 5.0, a[1] + p[1] / 5.0]);
-        let md = DST
-            .iter()
-            .fold([0.0; 2], |a, p| [a[0] + p[0] / 5.0, a[1] + p[1] / 5.0]);
+        let ms = src.iter().fold([0.0; 2], |a, p| [a[0] + p[0] / 5.0, a[1] + p[1] / 5.0]);
+        let md = DST.iter().fold([0.0; 2], |a, p| [a[0] + p[0] / 5.0, a[1] + p[1] / 5.0]);
         let (mut num_a, mut num_b, mut den) = (0f32, 0f32, 0f32);
         for i in 0..5 {
             let (sx, sy) = (src[i][0] - ms[0], src[i][1] - ms[1]);
@@ -332,11 +323,13 @@ fn read_profile(path: &Path) -> Option<Vec<[f32; EMB]>> {
         return None;
     }
     Some(
-        body.chunks_exact(EMB * 4)
+        body.as_chunks::<{ EMB * 4 }>()
+            .0
+            .iter()
             .map(|chunk| {
                 let mut e = [0f32; EMB];
-                for (i, b) in chunk.chunks_exact(4).enumerate() {
-                    e[i] = f32::from_le_bytes(b.try_into().unwrap());
+                for (v, b) in e.iter_mut().zip(chunk.as_chunks::<4>().0) {
+                    *v = f32::from_le_bytes(*b);
                 }
                 normalize(&mut e);
                 e
@@ -364,8 +357,5 @@ pub fn write_profile(name: &str, embeddings: &[[f32; EMB]]) -> std::io::Result<(
             data.extend_from_slice(&v.to_le_bytes());
         }
     }
-    std::fs::write(
-        crate::config::faces_dir().join(format!("{name}.face")),
-        data,
-    )
+    std::fs::write(crate::config::faces_dir().join(format!("{name}.face")), data)
 }

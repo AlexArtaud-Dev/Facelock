@@ -91,10 +91,7 @@ pub fn run_workflow(sh: &Arc<Shared>, wf: &Workflow, origin: Option<&str>) {
         sh.log(format!(
             "▶ « {} »{}",
             wf.name,
-            origin
-                .as_deref()
-                .map(|o| format!(" ({o})"))
-                .unwrap_or_default()
+            origin.as_deref().map(|o| format!(" ({o})")).unwrap_or_default()
         ));
         if origin.is_none() {
             if wf.actions.is_empty() {
@@ -116,16 +113,16 @@ pub fn run(sh: Arc<Shared>, rx: Receiver<MonCmd>) {
             return;
         }
     };
-    sh.profiles
-        .store(engine.profiles.len() as u64, Ordering::Relaxed);
+    sh.profiles.store(engine.profiles.len() as u64, Ordering::Relaxed);
     // Les pages du modèle embarqué lues au chargement ne servent plus :
     // on les rend au système (working set réduit de ~40 Mo).
+    #[cfg(windows)]
     unsafe {
         use windows::Win32::System::Threading::{GetCurrentProcess, SetProcessWorkingSetSize};
         let _ = SetProcessWorkingSetSize(GetCurrentProcess(), usize::MAX, usize::MAX);
     }
     if engine.profiles.is_empty() {
-        sh.log("Aucun visage enrôlé — ouvre Paramètres > Visages");
+        sh.log("Aucun visage enrôlé — ouvre l'onglet Visages");
     }
     let mut m = Mon {
         sh,
@@ -164,8 +161,7 @@ impl Mon {
                 self.trig = Triggers::default();
                 self.tracked.clear();
                 self.sh.suspended.store(false, Ordering::SeqCst);
-                self.sh
-                    .log("Réinitialisation — la vérification reprend de zéro");
+                self.sh.log("Réinitialisation — la vérification reprend de zéro");
                 crate::daemon::post_refresh(&self.sh);
             }
             MonCmd::ReloadProfiles => {
@@ -201,20 +197,14 @@ impl Mon {
                 let name = name.trim().to_string();
                 let res = match &self.enroll {
                     None => Err("Aucun enrôlement en cours".to_string()),
-                    Some(_) if !crate::engine::valid_profile_name(&name) => Err(
-                        "Nom invalide : lettres, chiffres, espaces, tirets ; 32 caractères max."
-                            .into(),
-                    ),
+                    Some(_) if !crate::engine::valid_profile_name(&name) => {
+                        Err("Nom invalide : lettres, chiffres, espaces, tirets ; 32 caractères max.".into())
+                    }
                     Some(en) if en.embeddings.len() < MIN_SAMPLES => {
                         Err(format!("Au moins {MIN_SAMPLES} captures nécessaires"))
                     }
                     Some(en) => crate::engine::write_profile(&name, &en.embeddings)
-                        .map(|_| {
-                            format!(
-                                "Profil « {name} » enregistré ({} empreintes)",
-                                en.embeddings.len()
-                            )
-                        })
+                        .map(|_| format!("Profil « {name} » enregistré ({} empreintes)", en.embeddings.len()))
                         .map_err(|e| format!("Écriture impossible : {e}")),
                 };
                 if let Ok(msg) = &res {
@@ -293,10 +283,8 @@ impl Mon {
             }
             Err(e) => {
                 if !self.cam_error_logged {
-                    self.sh.log(format!(
-                        "Caméra indisponible ({}), nouvel essai toutes les 10 s",
-                        e.message()
-                    ));
+                    self.sh
+                        .log(format!("Caméra indisponible ({}), nouvel essai toutes les 10 s", e));
                     self.cam_error_logged = true;
                 }
                 false
@@ -305,9 +293,7 @@ impl Mon {
     }
 
     fn grab(&mut self) -> Option<Frame> {
-        let fresh = self
-            .last_read
-            .is_none_or(|t| t.elapsed() > Duration::from_millis(150));
+        let fresh = self.last_read.is_none_or(|t| t.elapsed() > Duration::from_millis(150));
         let res = self.cam.as_mut()?.read(fresh);
         self.last_read = Some(Instant::now());
         match res {
@@ -374,9 +360,10 @@ impl Mon {
         let mut results: Vec<FaceBox> = Vec::with_capacity(faces.len());
         let mut tracked = Vec::with_capacity(faces.len());
         for face in &faces {
-            let cached = self.tracked.iter().find(|t| {
-                now.duration_since(t.at) < REVERIFY && box_iou(&t.bbox, &face.bbox) > TRACK_IOU
-            });
+            let cached = self
+                .tracked
+                .iter()
+                .find(|t| now.duration_since(t.at) < REVERIFY && box_iou(&t.bbox, &face.bbox) > TRACK_IOU);
             let (name, score, at) = match cached {
                 Some(t) => (t.name.clone(), t.score, t.at),
                 None => match self.engine.embed(&frame, face) {
@@ -422,9 +409,7 @@ impl Mon {
         }
         self.trig.me_present = me;
 
-        self.trig
-            .wf
-            .retain(|id, _| cfg.workflows.iter().any(|w| w.id == *id));
+        self.trig.wf.retain(|id, _| cfg.workflows.iter().any(|w| w.id == *id));
         for wf in cfg.workflows.iter().filter(|w| w.enabled) {
             let st = self.trig.wf.entry(wf.id).or_default();
             let cooled = st
@@ -442,10 +427,8 @@ impl Mon {
                     } else {
                         let since = *st.since.get_or_insert_with(|| {
                             if *grace > 0.0 {
-                                self.sh.log(format!(
-                                    "« {} » : absence détectée, décompte de {grace:.0} s",
-                                    wf.name
-                                ));
+                                self.sh
+                                    .log(format!("« {} » : absence détectée, décompte de {grace:.0} s", wf.name));
                             }
                             now
                         });
@@ -515,11 +498,7 @@ impl Mon {
             bgra: frame.bgra.clone(),
         };
         if let Some(en) = self.enroll.as_mut() {
-            en.current = if one {
-                Some((frame, faces[0].clone()))
-            } else {
-                None
-            };
+            en.current = if one { Some((frame, faces[0].clone())) } else { None };
         }
         self.publish(published, boxes);
         ENROLL_PERIOD

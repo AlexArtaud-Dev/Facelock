@@ -1,6 +1,7 @@
 //! Régénère assets/facelock.ico (16 à 256 px) et assets/logo.png depuis src/icon.rs.
 //!   cargo run --example gen_icon
 #[path = "../src/icon.rs"]
+#[allow(dead_code)]
 mod icon;
 
 use image::codecs::ico::{IcoEncoder, IcoFrame};

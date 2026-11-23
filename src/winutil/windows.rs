@@ -1,6 +1,7 @@
 //! Utilitaires Windows côté interface : icônes de processus, enregistreur de
 //! raccourcis (hook clavier temporaire), lancement à l'ouverture de session.
 
+use super::{ProcEntry, ICON};
 use crate::hotkey;
 use std::cell::RefCell;
 use std::collections::BTreeMap;
@@ -17,11 +18,8 @@ use windows::Win32::System::Threading::{
 use windows::Win32::UI::Shell::{SHGetFileInfoW, SHFILEINFOW, SHGFI_ICON, SHGFI_LARGEICON};
 use windows::Win32::UI::WindowsAndMessaging::*;
 
-pub const ICON: usize = 32;
-
-pub struct ProcEntry {
-    pub name: String,
-    pub icon: Option<Vec<u8>>, // RGBA 32x32
+pub fn open_folder(path: &std::path::Path) {
+    let _ = std::process::Command::new("explorer").arg(path).spawn();
 }
 
 fn exe_path(pid: u32) -> Option<String> {
@@ -29,12 +27,7 @@ fn exe_path(pid: u32) -> Option<String> {
         let h = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid).ok()?;
         let mut buf = [0u16; 1024];
         let mut len = buf.len() as u32;
-        let ok = QueryFullProcessImageNameW(
-            h,
-            PROCESS_NAME_WIN32,
-            windows::core::PWSTR(buf.as_mut_ptr()),
-            &mut len,
-        );
+        let ok = QueryFullProcessImageNameW(h, PROCESS_NAME_WIN32, windows::core::PWSTR(buf.as_mut_ptr()), &mut len);
         let _ = CloseHandle(h);
         ok.ok()?;
         Some(String::from_utf16_lossy(&buf[..len as usize]))
@@ -51,9 +44,7 @@ pub fn list_processes() -> Vec<ProcEntry> {
         if pid == 0 || !name.to_lowercase().ends_with(".exe") {
             continue;
         }
-        let entry = seen
-            .entry(name.to_lowercase())
-            .or_insert_with(|| (name.clone(), None));
+        let entry = seen.entry(name.to_lowercase()).or_insert_with(|| (name.clone(), None));
         if entry.1.is_none() {
             entry.1 = exe_path(pid);
         }
@@ -105,22 +96,13 @@ unsafe fn hicon_rgba(icon: HICON) -> Option<Vec<u8>> {
     let mut out = None;
     if let Ok(bmp) = CreateDIBSection(Some(mem), &bmi, DIB_RGB_COLORS, &mut bits, None, 0) {
         let old = SelectObject(mem, bmp.into());
-        let _ = DrawIconEx(
-            mem,
-            0,
-            0,
-            icon,
-            ICON as i32,
-            ICON as i32,
-            0,
-            None,
-            DI_NORMAL,
-        );
+        let _ = DrawIconEx(mem, 0, 0, icon, ICON as i32, ICON as i32, 0, None, DI_NORMAL);
         let _ = GdiFlush();
         let src = std::slice::from_raw_parts(bits as *const u8, ICON * ICON * 4);
-        let no_alpha = src.chunks_exact(4).all(|p| p[3] == 0);
+        let px = src.as_chunks::<4>().0;
+        let no_alpha = px.iter().all(|p| p[3] == 0);
         let mut rgba = Vec::with_capacity(src.len());
-        for p in src.chunks_exact(4) {
+        for p in px {
             rgba.extend_from_slice(&[p[2], p[1], p[0], if no_alpha { 255 } else { p[3] }]);
         }
         out = Some(rgba);
@@ -174,9 +156,7 @@ pub fn record_combo() -> String {
         let mut msg = MSG::default();
         while GetMessageW(&mut msg, None, 0, 0).as_bool() {
             let first = PRESSED.with(|p| p.borrow().1);
-            if first.is_some_and(|t| t.elapsed() >= CAPTURE_WINDOW)
-                || start.elapsed() >= CAPTURE_TIMEOUT
-            {
+            if first.is_some_and(|t| t.elapsed() >= CAPTURE_WINDOW) || start.elapsed() >= CAPTURE_TIMEOUT {
                 break;
             }
             DispatchMessageW(&msg);
@@ -235,8 +215,7 @@ pub fn autostart_enabled() -> bool {
 pub fn set_autostart(on: bool) -> bool {
     unsafe {
         let mut key = HKEY::default();
-        if RegOpenKeyExW(HKEY_CURRENT_USER, RUN_KEY, None, KEY_SET_VALUE, &mut key) != ERROR_SUCCESS
-        {
+        if RegOpenKeyExW(HKEY_CURRENT_USER, RUN_KEY, None, KEY_SET_VALUE, &mut key) != ERROR_SUCCESS {
             return false;
         }
         let ok = if on {

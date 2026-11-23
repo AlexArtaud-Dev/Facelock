@@ -90,9 +90,7 @@ fn glyph(x: f32, y: f32, detail: bool) -> bool {
         let (a, l, r) = (0.56, 0.22, 0.05);
         for (sx, sy) in [(-1.0f32, -1.0f32), (1.0, -1.0), (-1.0, 1.0), (1.0, 1.0)] {
             let (cx, cy) = (sx * a, sy * a);
-            if capsule(x, y, cx, cy, cx - sx * l, cy, r)
-                || capsule(x, y, cx, cy, cx, cy - sy * l, r)
-            {
+            if capsule(x, y, cx, cy, cx - sx * l, cy, r) || capsule(x, y, cx, cy, cx, cy - sy * l, r) {
                 white = true;
             }
         }

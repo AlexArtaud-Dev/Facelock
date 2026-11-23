@@ -32,34 +32,31 @@ pub const TRIGGERS: &[TriggerMeta] = &[
     TriggerMeta {
         kind: "absence",
         label: "Je m'absente",
-        icon: '\u{E805}',
+        icon: '\u{E73A}',
         color: ACCENT,
     },
     TriggerMeta {
         kind: "stranger",
         label: "Visage inconnu",
-        icon: '\u{E7EE}',
+        icon: '\u{EC36}',
         color: RED,
     },
     TriggerMeta {
         kind: "return",
         label: "Je reviens",
-        icon: '\u{E8FA}',
+        icon: '\u{E580}',
         color: GREEN,
     },
     TriggerMeta {
         kind: "hotkey",
         label: "Raccourci clavier",
-        icon: '\u{E765}',
+        icon: '\u{E2D8}',
         color: VIOLET,
     },
 ];
 
 pub fn trigger_meta(t: &Trigger) -> &'static TriggerMeta {
-    TRIGGERS
-        .iter()
-        .find(|m| m.kind == t.kind())
-        .unwrap_or(&TRIGGERS[0])
+    TRIGGERS.iter().find(|m| m.kind == t.kind()).unwrap_or(&TRIGGERS[0])
 }
 
 fn secs(s: f64) -> String {
@@ -152,14 +149,7 @@ fn node(
     let stroke = if selected {
         Stroke::new(2.0, color)
     } else {
-        Stroke::new(
-            1.0,
-            if hovered {
-                color.gamma_multiply(0.6)
-            } else {
-                BORDER
-            },
-        )
+        Stroke::new(1.0, if hovered { color.gamma_multiply(0.6) } else { BORDER })
     };
     p.rect(rect, 14.0, fill, stroke, StrokeKind::Inside);
     let c = egui::pos2(rect.left() + 32.0, rect.center().y);
@@ -181,19 +171,12 @@ fn arrow(ui: &mut egui::Ui) {
     let p = ui.painter();
     let y = rect.center().y;
     p.line_segment(
-        [
-            egui::pos2(rect.left() + 2.0, y),
-            egui::pos2(rect.right() - 6.0, y),
-        ],
+        [egui::pos2(rect.left() + 2.0, y), egui::pos2(rect.right() - 6.0, y)],
         Stroke::new(2.0, FAINT),
     );
     let tip = egui::pos2(rect.right() - 2.0, y);
     p.add(egui::Shape::convex_polygon(
-        vec![
-            tip,
-            egui::pos2(tip.x - 8.0, y - 5.0),
-            egui::pos2(tip.x - 8.0, y + 5.0),
-        ],
+        vec![tip, egui::pos2(tip.x - 8.0, y - 5.0), egui::pos2(tip.x - 8.0, y + 5.0)],
         FAINT,
         Stroke::NONE,
     ));
@@ -279,11 +262,7 @@ pub fn workflow_card(ui: &mut egui::Ui, idx: usize, wf: &mut Workflow, cx: &mut 
                     if wf.enabled { GREEN } else { MUTED },
                 );
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    toggle(ui, &mut wf.enabled).on_hover_text(if wf.enabled {
-                        "Désactiver"
-                    } else {
-                        "Activer"
-                    });
+                    toggle(ui, &mut wf.enabled).on_hover_text(if wf.enabled { "Désactiver" } else { "Activer" });
                     ui.add_space(6.0);
                     if icon_button(ui, I_DELETE, "Supprimer", RED).clicked() {
                         cx.ops.push(Op::Delete(idx));
@@ -291,9 +270,7 @@ pub fn workflow_card(ui: &mut egui::Ui, idx: usize, wf: &mut Workflow, cx: &mut 
                     if icon_button(ui, I_COPY, "Dupliquer", MUTED).clicked() {
                         cx.ops.push(Op::Duplicate(idx));
                     }
-                    if icon_button(ui, I_PLAY, "Tester maintenant (exécute les actions)", GREEN)
-                        .clicked()
-                    {
+                    if icon_button(ui, I_PLAY, "Tester maintenant (exécute les actions)", GREEN).clicked() {
                         cx.ops.push(Op::Test(wf.id));
                     }
                 });
@@ -400,14 +377,7 @@ fn trigger_editor(ui: &mut egui::Ui, wf: &mut Workflow, cx: &mut Ctx) {
     ui.label(small("DÉCLENCHEUR").color(MUTED));
     ui.horizontal_wrapped(|ui| {
         for m in TRIGGERS {
-            if chip(
-                ui,
-                wf.trigger.kind() == m.kind,
-                Some(m.icon),
-                m.label,
-                m.color,
-            )
-            .clicked()
+            if chip(ui, wf.trigger.kind() == m.kind, Some(m.icon), m.label, m.color).clicked()
                 && wf.trigger.kind() != m.kind
             {
                 wf.trigger = Trigger::default_of(m.kind);
@@ -417,7 +387,9 @@ fn trigger_editor(ui: &mut egui::Ui, wf: &mut Workflow, cx: &mut Ctx) {
     ui.add_space(8.0);
     match &mut wf.trigger {
         Trigger::Absence { grace } => {
-            ui.label(muted("Se déclenche quand aucun visage enrôlé n'est devant l'écran pendant le délai choisi."));
+            ui.label(muted(
+                "Se déclenche quand aucun visage enrôlé n'est devant l'écran pendant le délai choisi.",
+            ));
             ui.horizontal(|ui| {
                 field_label(ui, "Délai de grâce");
                 ui.add(
@@ -429,9 +401,7 @@ fn trigger_editor(ui: &mut egui::Ui, wf: &mut Workflow, cx: &mut Ctx) {
             });
         }
         Trigger::Stranger { grace, when } => {
-            ui.label(muted(
-                "Se déclenche quand un visage non enrôlé est détecté.",
-            ));
+            ui.label(muted("Se déclenche quand un visage non enrôlé est détecté."));
             ui.horizontal(|ui| {
                 field_label(ui, "Condition");
                 for (w, l) in [
@@ -446,15 +416,13 @@ fn trigger_editor(ui: &mut egui::Ui, wf: &mut Workflow, cx: &mut Ctx) {
             });
             ui.horizontal(|ui| {
                 field_label(ui, "Présence continue");
-                ui.add(
-                    egui::Slider::new(grace, 0.0..=60.0)
-                        .suffix(" s")
-                        .max_decimals(0),
-                );
+                ui.add(egui::Slider::new(grace, 0.0..=60.0).suffix(" s").max_decimals(0));
             });
         }
         Trigger::Return { min_absence } => {
-            ui.label(muted("Se déclenche quand ton visage réapparaît après une absence (sans verrouillage entre-temps)."));
+            ui.label(muted(
+                "Se déclenche quand ton visage réapparaît après une absence (sans verrouillage entre-temps).",
+            ));
             ui.horizontal(|ui| {
                 field_label(ui, "Absence minimale");
                 ui.add(
@@ -483,11 +451,7 @@ fn trigger_editor(ui: &mut egui::Ui, wf: &mut Workflow, cx: &mut Ctx) {
                 if button(
                     ui,
                     Some(I_KEYBOARD),
-                    if combo.is_empty() {
-                        "Enregistrer"
-                    } else {
-                        "Modifier"
-                    },
+                    if combo.is_empty() { "Enregistrer" } else { "Modifier" },
                     Kind::Ghost,
                     cx.recording.is_none(),
                 )
@@ -541,15 +505,9 @@ fn action_editor(ui: &mut egui::Ui, wf: &mut Workflow, i: usize, cx: &mut Ctx) {
     ui.horizontal_wrapped(|ui| {
         ui.spacing_mut().item_spacing = Vec2::new(8.0, 8.0);
         for k in KINDS {
-            if chip(
-                ui,
-                a.action == k.id,
-                Some(k.icon),
-                k.label,
-                action_color(k.id),
-            )
-            .on_hover_text(k.desc)
-            .clicked()
+            if chip(ui, a.action == k.id, Some(k.icon), k.label, action_color(k.id))
+                .on_hover_text(k.desc)
+                .clicked()
             {
                 a.action = k.id.to_string();
             }
@@ -610,11 +568,7 @@ fn action_editor(ui: &mut egui::Ui, wf: &mut Workflow, i: usize, cx: &mut Ctx) {
         ui.horizontal(|ui| {
             field_label(ui, "Durée");
             let mut s = a.params.seconds.unwrap_or(1.0);
-            ui.add(
-                egui::Slider::new(&mut s, 0.5..=60.0)
-                    .suffix(" s")
-                    .max_decimals(1),
-            );
+            ui.add(egui::Slider::new(&mut s, 0.5..=60.0).suffix(" s").max_decimals(1));
             if a.params.seconds != Some(s) {
                 a.params.seconds = Some(s);
             }
@@ -698,13 +652,8 @@ pub const PRESETS: &[Preset] = &[
         build: || {
             wf(
                 "Panic button",
-                Trigger::Hotkey {
-                    combo: String::new(),
-                },
-                vec![
-                    with("switch_desktop", |p| p.desktop = Some(2)),
-                    action("mute"),
-                ],
+                Trigger::Hotkey { combo: String::new() },
+                vec![with("switch_desktop", |p| p.desktop = Some(2)), action("mute")],
                 0.0,
             )
         },

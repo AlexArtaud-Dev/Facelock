@@ -1,8 +1,8 @@
 //! Système de design : couleurs, polices, widgets peints à la main.
 
 use eframe::egui::{
-    self, text::LayoutJob, Align2, Color32, CornerRadius, FontFamily, FontId, Response, RichText,
-    Sense, Stroke, StrokeKind, Vec2,
+    self, text::LayoutJob, Align2, Color32, CornerRadius, FontFamily, FontId, Response, RichText, Sense, Stroke,
+    StrokeKind, Vec2,
 };
 use std::sync::Arc;
 
@@ -26,32 +26,32 @@ pub const RED: Color32 = Color32::from_rgb(255, 88, 112);
 pub const ORANGE: Color32 = Color32::from_rgb(255, 184, 76);
 pub const TEAL: Color32 = Color32::from_rgb(34, 211, 238);
 
-// Glyphes Segoe Fluent Icons
-pub const I_DASH: char = '\u{E80F}';
-pub const I_FLOW: char = '\u{E945}';
-pub const I_FACE: char = '\u{E77B}';
-pub const I_SETTINGS: char = '\u{E713}';
-pub const I_LOCK: char = '\u{E72E}';
-pub const I_EYE: char = '\u{E890}';
-pub const I_PAUSE: char = '\u{E769}';
-pub const I_PLAY: char = '\u{E768}';
-pub const I_ADD: char = '\u{E710}';
-pub const I_DELETE: char = '\u{E74D}';
-pub const I_COPY: char = '\u{E8C8}';
-pub const I_REFRESH: char = '\u{E72C}';
-pub const I_VIDEO: char = '\u{E714}';
-pub const I_CLOCK: char = '\u{E823}';
-pub const I_KEYBOARD: char = '\u{E765}';
-pub const I_CHECK: char = '\u{E73E}';
-pub const I_WARN: char = '\u{E7BA}';
-pub const I_FOLDER: char = '\u{E8B7}';
-pub const I_POWER: char = '\u{E7E8}';
-pub const I_CHEVRON: char = '\u{E76C}';
-pub const I_CLOSE: char = '\u{E711}';
-pub const I_BELL: char = '\u{EA8F}';
-pub const I_INFO: char = '\u{E946}';
-pub const I_LEFT: char = '\u{E76B}';
-pub const I_RIGHT: char = '\u{E76C}';
+// Glyphes de la police d'icônes Phosphor (MIT, embarquée : assets/fonts)
+pub const I_DASH: char = '\u{E2C2}';
+pub const I_FLOW: char = '\u{E2DE}';
+pub const I_FACE: char = '\u{E6FC}';
+pub const I_SETTINGS: char = '\u{E270}';
+pub const I_LOCK: char = '\u{E2FA}';
+pub const I_EYE: char = '\u{E220}';
+pub const I_PAUSE: char = '\u{E39E}';
+pub const I_PLAY: char = '\u{E3D0}';
+pub const I_ADD: char = '\u{E3D4}';
+pub const I_DELETE: char = '\u{E4A6}';
+pub const I_COPY: char = '\u{E1CA}';
+pub const I_REFRESH: char = '\u{E036}';
+pub const I_VIDEO: char = '\u{E4DA}';
+pub const I_CLOCK: char = '\u{E19A}';
+pub const I_KEYBOARD: char = '\u{E2D8}';
+pub const I_CHECK: char = '\u{E182}';
+pub const I_WARN: char = '\u{E4E0}';
+pub const I_FOLDER: char = '\u{E24A}';
+pub const I_POWER: char = '\u{E3DA}';
+pub const I_CHEVRON: char = '\u{E13A}';
+pub const I_CLOSE: char = '\u{E4F6}';
+pub const I_BELL: char = '\u{E0CE}';
+pub const I_INFO: char = '\u{E2CE}';
+pub const I_LEFT: char = '\u{E138}';
+pub const I_RIGHT: char = '\u{E13A}';
 
 pub fn icons() -> FontFamily {
     FontFamily::Name("icons".into())
@@ -66,17 +66,11 @@ pub fn icon(c: char, size: f32) -> RichText {
 }
 
 pub fn h1(text: &str) -> RichText {
-    RichText::new(text)
-        .family(semibold())
-        .size(24.0)
-        .color(TEXT)
+    RichText::new(text).family(semibold()).size(24.0).color(TEXT)
 }
 
 pub fn h2(text: &str) -> RichText {
-    RichText::new(text)
-        .family(semibold())
-        .size(16.5)
-        .color(TEXT)
+    RichText::new(text).family(semibold()).size(16.5).color(TEXT)
 }
 
 pub fn muted(text: &str) -> RichText {
@@ -87,24 +81,77 @@ pub fn small(text: &str) -> RichText {
     RichText::new(text).size(12.5).color(MUTED)
 }
 
+static PHOSPHOR: &[u8] = include_bytes!("../../assets/fonts/Phosphor.ttf");
+
+/// Premier fichier de police lisible parmi des candidats (chemins absolus).
+fn read_font(candidates: &[&str]) -> Option<Vec<u8>> {
+    candidates.iter().find_map(|p| std::fs::read(p).ok())
+}
+
+#[cfg(windows)]
+const FONTS_BODY: &[&str] = &[r"C:\Windows\Fonts\segoeui.ttf"];
+#[cfg(windows)]
+const FONTS_SEMIBOLD: &[&str] = &[r"C:\Windows\Fonts\seguisb.ttf", r"C:\Windows\Fonts\segoeuib.ttf"];
+#[cfg(windows)]
+const FONTS_SYMBOL: &[&str] = &[r"C:\Windows\Fonts\seguisym.ttf"];
+#[cfg(windows)]
+const FONTS_MONO: &[&str] = &[r"C:\Windows\Fonts\consola.ttf"];
+
+#[cfg(not(windows))]
+const FONTS_BODY: &[&str] = &[
+    "/usr/share/fonts/truetype/inter/Inter-Regular.ttf",
+    "/usr/share/fonts/opentype/inter/Inter-Regular.otf",
+    "/usr/share/fonts/inter/Inter-Regular.otf",
+    "/usr/share/fonts/truetype/noto/NotoSans-Regular.ttf",
+    "/usr/share/fonts/noto/NotoSans-Regular.ttf",
+    "/usr/share/fonts/google-noto/NotoSans-Regular.ttf",
+    "/usr/share/fonts/truetype/ubuntu/Ubuntu-R.ttf",
+    "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+    "/usr/share/fonts/TTF/DejaVuSans.ttf",
+];
+#[cfg(not(windows))]
+const FONTS_SEMIBOLD: &[&str] = &[
+    "/usr/share/fonts/truetype/inter/Inter-SemiBold.ttf",
+    "/usr/share/fonts/opentype/inter/Inter-SemiBold.otf",
+    "/usr/share/fonts/inter/Inter-SemiBold.otf",
+    "/usr/share/fonts/truetype/noto/NotoSans-SemiBold.ttf",
+    "/usr/share/fonts/noto/NotoSans-SemiBold.ttf",
+    "/usr/share/fonts/truetype/noto/NotoSans-Bold.ttf",
+    "/usr/share/fonts/truetype/ubuntu/Ubuntu-M.ttf",
+    "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
+    "/usr/share/fonts/TTF/DejaVuSans-Bold.ttf",
+];
+#[cfg(not(windows))]
+const FONTS_SYMBOL: &[&str] = &[
+    "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+    "/usr/share/fonts/TTF/DejaVuSans.ttf",
+];
+#[cfg(not(windows))]
+const FONTS_MONO: &[&str] = &[
+    "/usr/share/fonts/truetype/jetbrains-mono/JetBrainsMono-Regular.ttf",
+    "/usr/share/fonts/truetype/noto/NotoSansMono-Regular.ttf",
+    "/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf",
+    "/usr/share/fonts/TTF/DejaVuSansMono.ttf",
+];
+
 pub fn setup(ctx: &egui::Context) {
     let mut fonts = egui::FontDefinitions::default();
-    let mut load = |key: &str, files: &[&str]| -> bool {
-        for f in files {
-            if let Ok(bytes) = std::fs::read(format!("C:\\Windows\\Fonts\\{f}")) {
+    let mut add = |key: &str, bytes: Option<Vec<u8>>| -> bool {
+        match bytes {
+            Some(b) => {
                 fonts
                     .font_data
-                    .insert(key.into(), Arc::new(egui::FontData::from_owned(bytes)));
-                return true;
+                    .insert(key.into(), Arc::new(egui::FontData::from_owned(b)));
+                true
             }
+            None => false,
         }
-        false
     };
-    let has_ui = load("segoe", &["segoeui.ttf"]);
-    let has_sb = load("segoe-sb", &["seguisb.ttf", "segoeuib.ttf"]);
-    let has_icons = load("fluent", &["SegoeIcons.ttf", "segmdl2.ttf"]);
-    let has_sym = load("segoe-sym", &["seguisym.ttf"]);
-    let has_mono = load("consolas", &["consola.ttf"]);
+    let has_ui = add("body", read_font(FONTS_BODY));
+    let has_sb = add("semibold", read_font(FONTS_SEMIBOLD));
+    let has_sym = add("symbols", read_font(FONTS_SYMBOL));
+    let has_mono = add("mono", read_font(FONTS_MONO));
+    add("phosphor", Some(PHOSPHOR.to_vec()));
     let prop = fonts
         .families
         .get(&FontFamily::Proportional)
@@ -112,21 +159,20 @@ pub fn setup(ctx: &egui::Context) {
         .unwrap_or_default();
     let mut body = Vec::new();
     if has_ui {
-        body.push("segoe".to_string());
+        body.push("body".to_string());
     }
     body.extend(prop);
     if has_sym {
-        body.push("segoe-sym".into());
+        body.push("symbols".into());
     }
+    // Les icônes servent aussi de secours dans le texte courant.
+    body.push("phosphor".into());
     let mut sb = Vec::new();
     if has_sb {
-        sb.push("segoe-sb".to_string());
+        sb.push("semibold".to_string());
     }
     sb.extend(body.clone());
-    let mut ic = Vec::new();
-    if has_icons {
-        ic.push("fluent".to_string());
-    }
+    let mut ic = vec!["phosphor".to_string()];
     ic.extend(body.clone());
     fonts.families.insert(FontFamily::Proportional, body);
     fonts.families.insert(semibold(), sb);
@@ -136,7 +182,7 @@ pub fn setup(ctx: &egui::Context) {
             .families
             .entry(FontFamily::Monospace)
             .or_default()
-            .insert(0, "consolas".into());
+            .insert(0, "mono".into());
     }
     ctx.set_fonts(fonts);
 
@@ -147,16 +193,14 @@ pub fn setup(ctx: &egui::Context) {
         s.spacing.interact_size.y = 30.0;
         s.spacing.slider_width = 260.0;
         s.spacing.combo_width = 260.0;
-        s.text_styles
-            .insert(egui::TextStyle::Body, FontId::proportional(14.5));
+        s.text_styles.insert(egui::TextStyle::Body, FontId::proportional(14.5));
         s.text_styles
             .insert(egui::TextStyle::Button, FontId::proportional(14.5));
         s.text_styles
             .insert(egui::TextStyle::Heading, FontId::new(22.0, semibold()));
         s.text_styles
             .insert(egui::TextStyle::Monospace, FontId::monospace(12.5));
-        s.text_styles
-            .insert(egui::TextStyle::Small, FontId::proportional(12.5));
+        s.text_styles.insert(egui::TextStyle::Small, FontId::proportional(12.5));
         let v = &mut s.visuals;
         v.panel_fill = BG;
         v.window_fill = SURFACE;
@@ -270,10 +314,7 @@ fn radial(p: &egui::Painter, c: egui::Pos2, r: f32, color: Color32) {
         let ri = ri as u32;
         for i in 0..n {
             let ang = i as f32 / n as f32 * std::f32::consts::TAU;
-            mesh.colored_vertex(
-                c + Vec2::new(ang.cos(), ang.sin()) * r * *rr,
-                color.gamma_multiply(*a),
-            );
+            mesh.colored_vertex(c + Vec2::new(ang.cos(), ang.sin()) * r * *rr, color.gamma_multiply(*a));
             let cur = 1 + ri * n + i;
             let next = 1 + ri * n + (i + 1) % n;
             if ri == 0 {
@@ -301,13 +342,7 @@ pub fn inset<R>(ui: &mut egui::Ui, add: impl FnOnce(&mut egui::Ui) -> R) -> R {
 }
 
 /// Ligne de réglage façon Windows 11 : icône, titre, description, contrôle à droite.
-pub fn setting_row(
-    ui: &mut egui::Ui,
-    ic: char,
-    title: &str,
-    desc: &str,
-    control: impl FnOnce(&mut egui::Ui),
-) {
+pub fn setting_row(ui: &mut egui::Ui, ic: char, title: &str, desc: &str, control: impl FnOnce(&mut egui::Ui)) {
     inset(ui, |ui| {
         ui.horizontal(|ui| {
             ui.add_space(2.0);
@@ -325,17 +360,15 @@ pub fn setting_row(
     });
 }
 
-pub fn page_header(
-    ui: &mut egui::Ui,
-    title: &str,
-    subtitle: &str,
-    right: impl FnOnce(&mut egui::Ui),
-) {
+pub fn page_header(ui: &mut egui::Ui, title: &str, subtitle: &str, right: impl FnOnce(&mut egui::Ui)) {
     ui.horizontal(|ui| {
+        // Le texte s'arrête avant la zone des boutons (pas de chevauchement).
+        let text_w = (ui.available_width() - 250.0).max(200.0);
         ui.vertical(|ui| {
+            ui.set_max_width(text_w);
             ui.spacing_mut().item_spacing.y = 4.0;
             ui.label(h1(title));
-            ui.label(muted(subtitle));
+            ui.add(egui::Label::new(muted(subtitle)).wrap());
         });
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), right);
     });
@@ -344,13 +377,7 @@ pub fn page_header(
 
 // ---------------------------------------------------------------- widgets
 
-pub fn one_line(
-    ui: &egui::Ui,
-    text: &str,
-    font: FontId,
-    color: Color32,
-    max_width: f32,
-) -> Arc<egui::Galley> {
+pub fn one_line(ui: &egui::Ui, text: &str, font: FontId, color: Color32, max_width: f32) -> Arc<egui::Galley> {
     let mut job = LayoutJob::simple_singleline(text.to_string(), font, color);
     job.wrap.max_width = max_width;
     job.wrap.max_rows = 1;
@@ -368,13 +395,7 @@ pub enum Kind {
 }
 
 /// Bouton peint : icône optionnelle + texte.
-pub fn button(
-    ui: &mut egui::Ui,
-    ic: Option<char>,
-    text: &str,
-    kind: Kind,
-    enabled: bool,
-) -> Response {
+pub fn button(ui: &mut egui::Ui, ic: Option<char>, text: &str, kind: Kind, enabled: bool) -> Response {
     let font = FontId::new(14.0, semibold());
     let galley = ui.painter().layout_no_wrap(text.to_string(), font, TEXT);
     let icon_w = if ic.is_some() { 24.0 } else { 0.0 };
@@ -382,22 +403,14 @@ pub fn button(
     let w = galley.size().x + icon_w + pad * 2.0 - if text.is_empty() { 8.0 } else { 0.0 };
     let (rect, resp) = ui.allocate_exact_size(
         Vec2::new(w.max(34.0), 34.0),
-        if enabled {
-            Sense::click()
-        } else {
-            Sense::hover()
-        },
+        if enabled { Sense::click() } else { Sense::hover() },
     );
     if ui.is_rect_visible(rect) {
         let hovered = enabled && resp.hovered();
         let pressed = enabled && resp.is_pointer_button_down_on();
         let (fill, fg, stroke) = match kind {
             Kind::Primary => (
-                if hovered {
-                    ACCENT.gamma_multiply(1.15)
-                } else {
-                    ACCENT
-                },
+                if hovered { ACCENT.gamma_multiply(1.15) } else { ACCENT },
                 Color32::WHITE,
                 Stroke::NONE,
             ),
@@ -425,20 +438,10 @@ pub fn button(
                 Stroke::NONE,
             ),
         };
-        let fill = if pressed {
-            fill.gamma_multiply(0.85)
-        } else {
-            fill
-        };
+        let fill = if pressed { fill.gamma_multiply(0.85) } else { fill };
         let alpha = if enabled { 1.0 } else { 0.4 };
         let p = ui.painter();
-        p.rect(
-            rect,
-            10.0,
-            fill.gamma_multiply(alpha),
-            stroke,
-            StrokeKind::Inside,
-        );
+        p.rect(rect, 10.0, fill.gamma_multiply(alpha), stroke, StrokeKind::Inside);
         if kind == Kind::Primary {
             // Brillance « verre » sur la moitié haute
             let top = egui::Rect::from_min_max(rect.min, egui::pos2(rect.right(), rect.center().y));
@@ -467,11 +470,7 @@ pub fn button(
             x += icon_w;
         }
         if !text.is_empty() {
-            p.galley_with_override_text_color(
-                egui::pos2(x, rect.center().y - galley.size().y / 2.0),
-                galley,
-                fg,
-            );
+            p.galley_with_override_text_color(egui::pos2(x, rect.center().y - galley.size().y / 2.0), galley, fg);
         }
     }
     if enabled {
@@ -491,15 +490,9 @@ pub fn icon_button(ui: &mut egui::Ui, ic: char, tip: &str, color: Color32) -> Re
     } else {
         color.gamma_multiply(0.75)
     };
-    ui.painter().text(
-        rect.center(),
-        Align2::CENTER_CENTER,
-        ic,
-        FontId::new(15.0, icons()),
-        c,
-    );
-    resp.on_hover_text(tip)
-        .on_hover_cursor(egui::CursorIcon::PointingHand)
+    ui.painter()
+        .text(rect.center(), Align2::CENTER_CENTER, ic, FontId::new(15.0, icons()), c);
+    resp.on_hover_text(tip).on_hover_cursor(egui::CursorIcon::PointingHand)
 }
 
 /// Interrupteur animé.
@@ -533,28 +526,16 @@ pub fn toggle(ui: &mut egui::Ui, on: &mut bool) -> Response {
 /// Interpolation sur les composantes prémultipliées (fonctionne avec les surfaces translucides).
 pub fn lerp_color(a: Color32, b: Color32, t: f32) -> Color32 {
     let l = |x: u8, y: u8| (x as f32 + (y as f32 - x as f32) * t).round() as u8;
-    Color32::from_rgba_premultiplied(
-        l(a.r(), b.r()),
-        l(a.g(), b.g()),
-        l(a.b(), b.b()),
-        l(a.a(), b.a()),
-    )
+    Color32::from_rgba_premultiplied(l(a.r(), b.r()), l(a.g(), b.g()), l(a.b(), b.b()), l(a.a(), b.a()))
 }
 
 /// Puce sélectionnable (contrôle segmenté).
-pub fn chip(
-    ui: &mut egui::Ui,
-    selected: bool,
-    ic: Option<char>,
-    text: &str,
-    color: Color32,
-) -> Response {
+pub fn chip(ui: &mut egui::Ui, selected: bool, ic: Option<char>, text: &str, color: Color32) -> Response {
     let galley = ui
         .painter()
         .layout_no_wrap(text.to_string(), FontId::proportional(13.5), TEXT);
     let iw = if ic.is_some() { 22.0 } else { 0.0 };
-    let (rect, resp) =
-        ui.allocate_exact_size(Vec2::new(galley.size().x + iw + 26.0, 32.0), Sense::click());
+    let (rect, resp) = ui.allocate_exact_size(Vec2::new(galley.size().x + iw + 26.0, 32.0), Sense::click());
     let p = ui.painter();
     let (fill, stroke, fg) = if selected {
         (color.gamma_multiply(0.2), Stroke::new(1.5, color), TEXT)
@@ -575,23 +556,17 @@ pub fn chip(
         );
         x += iw;
     }
-    p.galley_with_override_text_color(
-        egui::pos2(x, rect.center().y - galley.size().y / 2.0),
-        galley,
-        fg,
-    );
+    p.galley_with_override_text_color(egui::pos2(x, rect.center().y - galley.size().y / 2.0), galley, fg);
     resp.on_hover_cursor(egui::CursorIcon::PointingHand)
 }
 
 pub fn badge(ui: &mut egui::Ui, text: &str, color: Color32) {
-    let galley =
-        ui.painter()
-            .layout_no_wrap(text.to_string(), FontId::new(11.5, semibold()), color);
+    let galley = ui
+        .painter()
+        .layout_no_wrap(text.to_string(), FontId::new(11.5, semibold()), color);
     let (rect, _) = ui.allocate_exact_size(galley.size() + Vec2::new(16.0, 6.0), Sense::hover());
-    ui.painter()
-        .rect_filled(rect, 10.0, color.gamma_multiply(0.16));
-    ui.painter()
-        .galley(rect.min + Vec2::new(8.0, 3.0), galley, color);
+    ui.painter().rect_filled(rect, 10.0, color.gamma_multiply(0.16));
+    ui.painter().galley(rect.min + Vec2::new(8.0, 3.0), galley, color);
 }
 
 /// Disque coloré avec un glyphe au centre.
@@ -613,20 +588,13 @@ pub fn keycaps(ui: &mut egui::Ui, combo: &str) {
         if i > 0 {
             ui.label(small("+"));
         }
-        let galley =
-            ui.painter()
-                .layout_no_wrap(part.to_string(), FontId::new(13.0, semibold()), TEXT);
-        let (rect, _) =
-            ui.allocate_exact_size(galley.size() + Vec2::new(16.0, 10.0), Sense::hover());
+        let galley = ui
+            .painter()
+            .layout_no_wrap(part.to_string(), FontId::new(13.0, semibold()), TEXT);
+        let (rect, _) = ui.allocate_exact_size(galley.size() + Vec2::new(16.0, 10.0), Sense::hover());
         let p = ui.painter();
         p.rect_filled(rect.translate(Vec2::new(0.0, 2.0)), 6.0, SUNKEN);
-        p.rect(
-            rect,
-            6.0,
-            SURFACE3,
-            Stroke::new(1.0, BORDER),
-            StrokeKind::Inside,
-        );
+        p.rect(rect, 6.0, SURFACE3, Stroke::new(1.0, BORDER), StrokeKind::Inside);
         p.galley(rect.min + Vec2::new(8.0, 5.0), galley, TEXT);
     }
 }
