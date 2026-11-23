@@ -1,76 +1,115 @@
 <div align="center">
 
-# 🔐 FaceLock (Rust)
+<img src="assets/logo.png" width="112" alt="FaceLock">
+
+# FaceLock
 
 ### Ton PC connaît ton visage. Et il ne fait confiance à personne d'autre.
 
-*Verrouillage automatique par reconnaissance faciale pour Windows : un seul `.exe`, 100 % local, 0 % CPU au repos.*
+*Verrouillage et confidentialité par reconnaissance faciale — Windows et Linux, 100 % local, 0 % CPU au repos.*
+
+[![CI](https://github.com/AlexArtaud-Dev/Facelock/actions/workflows/ci.yml/badge.svg)](https://github.com/AlexArtaud-Dev/Facelock/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/v/release/AlexArtaud-Dev/Facelock?label=release)](https://github.com/AlexArtaud-Dev/Facelock/releases/latest)
+![Windows](https://img.shields.io/badge/Windows-10%2F11-0078D6?logo=windows&logoColor=white)
+![Linux](https://img.shields.io/badge/Linux-X11%20%7C%20Wayland-FCC624?logo=linux&logoColor=black)
+![Rust](https://img.shields.io/badge/Rust-1.95+-B7410E?logo=rust&logoColor=white)
+![License](https://img.shields.io/badge/license-MIT-yellow)
 
 </div>
 
 ---
 
-Réécriture complète en Rust de [FaceLock](https://github.com/AlexArtaud-Dev/Facelock) : mêmes fonctionnalités, même `config.json`, mais sans Python, OpenCV ni Tk.
+Tu te lèves, tu oublies `Win+L`, et ton écran raconte ta vie à tout l'open space. **FaceLock** regarde discrètement par ta webcam : dès que *ton* visage disparaît, ou qu'un inconnu s'installe ou lit par-dessus ton épaule, il déclenche **tes workflows**.
 
-## Ce qui change
+## ✨ Fonctionnalités
 
-| | Python (v1) | Rust (v2) |
+- 🎯 **Reconnaissance, pas seulement détection** : seuls les visages enrôlés comptent comme « toi ».
+- ⚡ **Workflows visuels** : un déclencheur (*je m'absente*, *visage inconnu*, *je reviens*, *raccourci clavier*) suivi d'une chaîne d'actions, construits bloc par bloc, activables un par un, avec 9 modèles prêts à l'emploi.
+- 🛡️ **Écran de confidentialité** : un message « Accès non autorisé » ou ton image, en plein écran par-dessus tout le reste. Il se ferme avec un **raccourci de secours obligatoire** (qui marche même si l'écran se fige) ou automatiquement à ton retour.
+- 🧰 **13 actions** : verrouiller, écran de confidentialité, changer de bureau virtuel, afficher le bureau, minimiser / fermer / déplacer une appli (par processus et titre de fenêtre), lecture/pause, couper le son, éteindre l'écran, mise en veille, notification, attendre.
+- 🪶 **Ultra léger** : un seul exécutable, 0 % CPU au repos (événements système, pas de sondage), caméra coupée dès que la session est verrouillée.
+- 🔒 **Vie privée** : aucune photo stockée, uniquement des empreintes 128-D ; rien ne quitte ta machine.
+
+## 🚀 Installation
+
+Télécharge la [dernière release](https://github.com/AlexArtaud-Dev/Facelock/releases/latest).
+
+| Système | Fichier | |
 |---|---|---|
-| Distribution | dossier PyInstaller + modèles | **un seul `FaceLock.exe`** (modèles embarqués) |
-| CPU au repos (session verrouillée, suspendu) | sondage toutes les 5 s | **0** : réveil par événement Windows |
-| Détection du verrouillage | `OpenInputDesktop` en boucle | `WTSRegisterSessionNotification` |
-| Raccourcis globaux | hook clavier sur **chaque** frappe (`keyboard`) | `RegisterHotKey` : le noyau ne réveille FaceLock que sur le combo |
-| Reconnaissance | SFace à chaque vérification | SFace seulement si un visage bouge, sinon toutes les 3 s (détection seule ≈ 10 ms) |
-| Interface | Tk chargé en permanence | processus séparé lancé à la demande, **mémoire libérée à la fermeture** |
-| Inférence | OpenCV DNN | [tract](https://github.com/sonos/tract), pur Rust, aucune DLL |
+| Windows 10/11 | `FaceLock-Setup-x.y.z.exe` | installation par utilisateur, sans droits admin |
+| Windows (portable) | `FaceLock-x.y.z-portable-x64.exe` | un seul fichier, rien à installer |
+| Debian / Ubuntu | `facelock_x.y.z_amd64.deb` | `sudo apt install ./facelock_x.y.z_amd64.deb` |
+| Autres Linux | `facelock-x.y.z-linux-x86_64.tar.gz` | binaire + `.desktop` + icône |
 
-Les détections et empreintes sont **identiques à OpenCV** (vérifié : mêmes boîtes, repères à < 0,25 px, cosinus des empreintes ≥ 0,999), donc le seuil recommandé de 0,363 reste valable.
+Les sommes de contrôle sont dans `SHA256SUMS-*.txt`. Au premier lancement : **Visages → Ajouter un visage** (12 captures, une minute).
 
-## Architecture
+### Linux : bon à savoir
+
+- Icône de notification : KDE, XFCE, Cinnamon… nativement ; GNOME avec l'extension *AppIndicator*.
+- Actions système via les outils standard : `loginctl` / `systemctl` (systemd), `xdotool` et `wmctrl` (fenêtres, bureaux), `playerctl`, `pactl`, `xset`. Le `.deb` les recommande ; un outil manquant est signalé dans le journal.
+- Raccourcis globaux : natifs sous X11. Sous **Wayland**, associe un raccourci du bureau à `facelock --run "<nom du workflow>"`.
+
+## ⌨️ Ligne de commande
+
+```text
+facelock                    démarre le service (icône de notification)
+facelock --ui [page]        ouvre l'interface (live, workflows, faces, settings)
+facelock --toggle           met en pause / relance la surveillance
+facelock --reset            réinitialise la vérification
+facelock --run "<nom>"      exécute un workflow
+facelock --dismiss          ferme l'écran de confidentialité
+facelock --quit             arrête le service
+```
+
+## 🏗️ Architecture
 
 ```
-FaceLock.exe                    (service résident, aucune lib graphique)
-├─ thread principal   icône de notification Win32, menu, RegisterHotKey, événements WTS
-├─ thread monitor     Media Foundation → YuNet → SFace → déclencheurs → actions
-└─ thread ipc         pipe nommé \\.\pipe\FaceLock-<utilisateur>
+facelock               service résident, aucune bibliothèque graphique chargée
+├─ système             icône, raccourcis globaux, verrouillage (Win32/WTS ou SNI/X11/logind)
+├─ monitor             webcam → YuNet → SFace → déclencheurs → workflows
+└─ ipc                 pipe nommé (Windows) / socket Unix 0600 (Linux)
 
-FaceLock.exe --ui <page>        (interface egui, lancée au clic sur l'icône)
+facelock --ui          interface egui, lancée à la demande, mémoire libérée à la fermeture
+facelock --overlay     écran de confidentialité (processus séparé, tué par le service)
 ```
 
-Le monitor dort sur un canal entre deux vérifications : une commande (suspendre, réinitialiser, verrouillage, enrôlement) le réveille instantanément.
-Session verrouillée, surveillance suspendue ou aucun profil : la caméra est libérée (LED éteinte) et le thread dort indéfiniment.
+Le moniteur dort entre deux vérifications et se réveille instantanément sur commande. Un visage déjà identifié n'est ré-identifié que s'il bouge ou toutes les 3 s : une vérification coûte environ 10 ms. L'inférence passe par [tract](https://github.com/sonos/tract), en pur Rust et sans DLL. Elle donne les **mêmes résultats qu'OpenCV** (cosinus des empreintes ≥ 0,999), ce qui garde valable le seuil recommandé de 0,363.
 
-| Fichier | Rôle |
+| Dossier | Rôle |
 |---|---|
-| `src/daemon.rs` | tray, menu, raccourcis, WTS, serveur IPC, lancement de l'UI |
-| `src/monitor.rs` | boucle de surveillance, cache d'identité, déclencheurs, enrôlement |
+| `src/daemon/` | service : cycle de vie, IPC, raccourcis, écran de confidentialité (+ `windows.rs` / `linux.rs`) |
+| `src/monitor.rs` | boucle de surveillance, cache d'identité, moteur de workflows, enrôlement |
 | `src/engine.rs` | YuNet + SFace (pré/post-traitement identique à OpenCV) |
-| `src/camera.rs` | capture Media Foundation synchrone à la demande |
-| `src/actions.rs` | verrouiller, veille, bureaux virtuels, fermer / minimiser / déplacer une appli |
-| `src/ui.rs` | interface : vue en direct, réglages, enrôlement, sélecteur de processus |
-| `src/config.rs` | `config.json` (compatible v1) |
+| `src/camera/` | Media Foundation (Windows), V4L2 (Linux) |
+| `src/actions/` | catalogue des actions + implémentations par système |
+| `src/ui/` | interface : thème verre, éditeur de workflows, écran de confidentialité |
 
-## Compiler
+## 🛠️ Développement
 
-Rust stable (1.91+, cible MSVC) :
-
-```powershell
-cargo build --release
+```bash
+cargo run                     # service
+cargo run -- --ui workflows   # interface seule
+cargo test                    # tests unitaires
+cargo run --release --example selftest   # auto-test des modèles
+scripts/package.sh 0.0.0-dev dist        # installeurs (Inno Setup / dpkg-deb)
 ```
 
-→ `target\release\facelock.exe`. Pour l'installeur ([Inno Setup 6](https://jrsoftware.org/isinfo.php)) : `build.bat` → `Output\FaceLock-Setup.exe`.
-L'installeur reprend l'`AppId` de la v1 : il met à jour l'installation Python sur place.
+Linux : `sudo apt install libclang-dev` (en-têtes V4L2). La version du compilateur est fixée par `rust-toolchain.toml`.
 
-## Migration depuis la v1
+Les commits suivent [Conventional Commits](https://www.conventionalcommits.org/fr/) : voir [CONTRIBUTING.md](CONTRIBUTING.md). Les releases sont automatiques : *release-please* tient à jour une PR de release (changelog et version) ; la fusionner publie la release GitHub avec les installeurs Windows et Linux.
 
-- `config.json` est relu tel quel (raccourcis, déclencheurs, panic button…).
-- Les profils de visage v1 (`.npz`) ne sont pas importés : ré-enrôle-toi dans **Visages** (12 captures, une minute).
-- Les raccourcis acceptent **une** touche principale plus des modificateurs (`ctrl+alt+p`). Les combos à plusieurs touches normales de la v1 (ex. `a+b`) ne sont plus possibles avec `RegisterHotKey`.
+## 🔄 Depuis la version Python (1.x)
 
-## Modèles
+- `config.json` est migré automatiquement vers les workflows (copie de l'ancien fichier dans `config.v1.json`).
+- Les profils de visage `.npz` ne sont pas importés : ré-enrôle-toi (une minute).
+- Les raccourcis prennent des modificateurs plus **une** touche (`ctrl+alt+p`).
 
-[YuNet](https://github.com/opencv/opencv_zoo/tree/main/models/face_detection_yunet) (MIT) et [SFace](https://github.com/opencv/opencv_zoo/tree/main/models/face_recognition_sface) (Apache 2.0), issus d'opencv_zoo, embarqués dans l'exécutable.
+## 🤔 FAQ
 
-## Licence
+**Peut-on le tromper avec une photo ?** Une bonne photo tenue bien droite, probablement. FaceLock protège contre les oublis de verrouillage et les curieux opportunistes, pas contre un espion déterminé ; pour de l'anti-spoofing matériel, utilise Windows Hello avec une caméra IR.
 
-MIT. Voir [LICENSE](LICENSE).
+**Et si l'écran de confidentialité se fige ?** Le raccourci de secours est capté par le service, pas par la fenêtre : il ferme l'écran même si celui-ci ne répond plus. En dernier recours, il reste `facelock --dismiss`.
+
+## 📄 Licence
+
+MIT, voir [LICENSE](LICENSE). Modèles [YuNet](https://github.com/opencv/opencv_zoo/tree/main/models/face_detection_yunet) (MIT) et [SFace](https://github.com/opencv/opencv_zoo/tree/main/models/face_recognition_sface) (Apache 2.0) issus d'opencv_zoo ; icônes [Phosphor](https://phosphoricons.com/) (MIT).
