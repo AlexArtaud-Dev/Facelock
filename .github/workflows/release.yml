@@ -1,0 +1,73 @@
+name: Release
+
+# À chaque push sur main, release-please tient à jour une PR « chore(main): release x.y.z »
+# (CHANGELOG.md + version de Cargo.toml, calculés depuis les Conventional Commits).
+# Fusionner cette PR crée le tag vX.Y.Z et la release GitHub ; les installeurs
+# Windows et Linux sont alors construits et attachés à la release.
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  release-please:
+    name: PR de release / tag
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: write
+      pull-requests: write
+    outputs:
+      created: ${{ steps.rp.outputs.release_created }}
+      tag: ${{ steps.rp.outputs.tag_name }}
+      version: ${{ steps.rp.outputs.version }}
+    steps:
+      - id: rp
+        uses: googleapis/release-please-action@45996ed1f6d02564a971a2fa1b5860e934307cf7 # v5.0.0
+        with:
+          # Une PR ouverte avec le jeton par défaut ne déclenche pas la CI :
+          # un secret RELEASE_TOKEN (fine-grained : contents + pull requests) l'évite.
+          token: ${{ secrets.RELEASE_TOKEN || github.token }}
+          config-file: release-please-config.json
+          manifest-file: .release-please-manifest.json
+
+  assets:
+    name: Installeurs (${{ matrix.os }})
+    needs: release-please
+    if: needs.release-please.outputs.created == 'true'
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+    permissions:
+      contents: write
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, windows-2025]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.release-please.outputs.tag }}
+      - run: rustup toolchain install
+      - name: Dépendances système (Linux)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq --no-install-recommends libclang-dev
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+      - run: cargo build --release --locked
+      - name: Paquets
+        shell: bash
+        run: scripts/package.sh "${{ needs.release-please.outputs.version }}" dist
+      - name: Publication sur la release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release upload "${{ needs.release-please.outputs.tag }}" dist/* --clobber
