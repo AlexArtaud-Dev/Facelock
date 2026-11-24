@@ -23,7 +23,12 @@ MINGW* | MSYS* | CYGWIN*)
     if [ ! -f "$ISCC" ]; then
         choco install innosetup -y --no-progress >/dev/null
     fi
-    "$ISCC" /Q "/DAppVersion=$VERSION" "/DOutputDir=$OUT" installer.iss
+    # Inno Setup attend un chemin Windows (/d/a/… serait lu comme D:\d\a\…).
+    "$ISCC" /Q "/DAppVersion=$VERSION" "/DOutputDir=$(cygpath -w "$OUT")" installer.iss
+    if [ ! -f "$OUT/FaceLock-Setup-$VERSION.exe" ]; then
+        echo "Installeur absent : $OUT/FaceLock-Setup-$VERSION.exe" >&2
+        exit 1
+    fi
     cp "$BIN/facelock.exe" "$OUT/FaceLock-$VERSION-portable-x64.exe"
     (cd "$OUT" && sha256sum FaceLock-* >SHA256SUMS-windows.txt)
     ;;
