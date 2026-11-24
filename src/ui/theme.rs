@@ -605,3 +605,102 @@ pub fn status_dot(ui: &mut egui::Ui, color: Color32) {
         .circle_filled(rect.center(), 7.0, color.gamma_multiply(0.25));
     ui.painter().circle_filled(rect.center(), 4.0, color);
 }
+
+// ------------------------------------------------------- durées
+
+/// Paliers naturels des curseurs de durée (secondes).
+pub const STEPS_GRACE: &[f64] = &[
+    0.0, 1.0, 2.0, 3.0, 5.0, 10.0, 15.0, 20.0, 30.0, 45.0, 60.0, 90.0, 120.0, 180.0, 300.0, 600.0,
+];
+pub const STEPS_PRESENCE: &[f64] = &[0.0, 1.0, 2.0, 3.0, 5.0, 10.0, 15.0, 20.0, 30.0, 60.0];
+pub const STEPS_RETURN: &[f64] = &[
+    1.0, 2.0, 3.0, 5.0, 10.0, 15.0, 20.0, 30.0, 45.0, 60.0, 90.0, 120.0, 180.0, 300.0, 600.0,
+];
+pub const STEPS_COOLDOWN: &[f64] = &[
+    0.0, 5.0, 10.0, 15.0, 20.0, 30.0, 45.0, 60.0, 90.0, 120.0, 180.0, 300.0, 600.0,
+];
+pub const STEPS_WAIT: &[f64] = &[0.5, 1.0, 1.5, 2.0, 3.0, 5.0, 10.0, 15.0, 20.0, 30.0, 45.0, 60.0];
+pub const STEPS_INTERVAL: &[f64] = &[0.2, 0.3, 0.5, 0.75, 1.0, 1.5, 2.0, 3.0, 5.0, 10.0];
+
+/// « 0,5 s », « 45 s », « 2 min », « 1 min 30 s ».
+pub fn fmt_duration(s: f64) -> String {
+    let num = |v: f64| {
+        if (v - v.round()).abs() < 0.01 {
+            format!("{}", v.round() as i64)
+        } else {
+            format!("{v:.2}").trim_end_matches('0').replace('.', ",")
+        }
+    };
+    if s < 60.0 {
+        return format!("{} s", num(s));
+    }
+    let (m, r) = ((s / 60.0).floor(), s % 60.0);
+    if r < 0.5 {
+        format!("{} min", m as i64)
+    } else {
+        format!("{} min {} s", m as i64, r.round() as i64)
+    }
+}
+
+/// Accepte « 90 », « 90 s », « 1,5 », « 2 min », « 1 min 30 », « 1:30 ».
+pub fn parse_duration(text: &str) -> Option<f64> {
+    let t = text.trim().to_lowercase().replace(',', ".");
+    if let Some((m, s)) = t.split_once(':') {
+        return Some(m.trim().parse::<f64>().ok()? * 60.0 + s.trim().parse::<f64>().ok()?);
+    }
+    if let Some((m, rest)) = t.split_once("min") {
+        let rest = rest.trim().trim_end_matches('s').trim();
+        let secs = if rest.is_empty() {
+            0.0
+        } else {
+            rest.parse::<f64>().ok()?
+        };
+        return Some(m.trim().parse::<f64>().ok()? * 60.0 + secs);
+    }
+    t.trim_end_matches('s').trim().parse().ok()
+}
+
+/// Curseur sur des paliers naturels + valeur exacte modifiable.
+/// Remplace les curseurs logarithmiques (2 s se retrouvait aux deux tiers).
+pub fn duration_slider(ui: &mut egui::Ui, value: &mut f64, steps: &[f64]) -> Response {
+    let (min, max) = (steps[0], steps[steps.len() - 1]);
+    let mut idx = steps
+        .iter()
+        .enumerate()
+        .min_by(|a, b| (a.1 - *value).abs().total_cmp(&(b.1 - *value).abs()))
+        .map(|(i, _)| i)
+        .unwrap_or(0);
+    let slider = ui.add(egui::Slider::new(&mut idx, 0..=steps.len() - 1).show_value(false));
+    if slider.changed() {
+        *value = steps[idx];
+    }
+    let exact = ui.add(
+        egui::DragValue::new(value)
+            .range(min..=max)
+            .speed(0.25)
+            .custom_formatter(|v, _| fmt_duration(v))
+            .custom_parser(parse_duration),
+    );
+    slider | exact
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn durations_roundtrip() {
+        assert_eq!(fmt_duration(0.5), "0,5 s");
+        assert_eq!(fmt_duration(2.0), "2 s");
+        assert_eq!(fmt_duration(120.0), "2 min");
+        assert_eq!(fmt_duration(90.0), "1 min 30 s");
+        assert_eq!(parse_duration("90"), Some(90.0));
+        assert_eq!(parse_duration("1,5 s"), Some(1.5));
+        assert_eq!(parse_duration("2 min"), Some(120.0));
+        assert_eq!(parse_duration("1 min 30 s"), Some(90.0));
+        assert_eq!(parse_duration("1:30"), Some(90.0));
+        for s in [0.0, 0.5, 3.0, 45.0, 60.0, 90.0, 600.0] {
+            assert_eq!(parse_duration(&fmt_duration(s)), Some(s), "{s}");
+        }
+    }
+}

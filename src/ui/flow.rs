@@ -255,6 +255,8 @@ pub struct Ctx<'a> {
     pub ops: &'a mut Vec<Op>,
     pub recording: Option<u64>,
     pub recording_action: Option<(u64, usize)>,
+    /// Raccourcis en conflit : usage -> message explicite
+    pub conflicts: &'a [(crate::config::HotkeyUse, String)],
 }
 
 pub fn workflow_card(ui: &mut egui::Ui, idx: usize, wf: &mut Workflow, cx: &mut Ctx) {
@@ -284,7 +286,9 @@ pub fn workflow_card(ui: &mut egui::Ui, idx: usize, wf: &mut Workflow, cx: &mut 
                     if wf.enabled { "Actif" } else { "En pause" },
                     if wf.enabled { GREEN } else { MUTED },
                 );
-                if wf.actions.iter().any(|a| a.problem().is_some()) {
+                if cx.conflicts.iter().any(|(u, _)| u.workflow() == Some(wf.id)) {
+                    badge(ui, "Conflit", RED);
+                } else if wf.actions.iter().any(|a| a.problem().is_some()) {
                     badge(ui, "Incomplet", ORANGE);
                 }
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
@@ -315,7 +319,11 @@ pub fn workflow_card(ui: &mut egui::Ui, idx: usize, wf: &mut Workflow, cx: &mut 
                         ui,
                         "QUAND",
                         meta.label,
-                        &trigger_summary(&wf.trigger),
+                        &conflict_or(
+                            cx,
+                            &crate::config::HotkeyUse::Trigger(wf.id),
+                            trigger_summary(&wf.trigger),
+                        ),
                         meta.icon,
                         meta.color,
                         sel_here == Some(Sel::Trigger),
@@ -331,7 +339,7 @@ pub fn workflow_card(ui: &mut egui::Ui, idx: usize, wf: &mut Workflow, cx: &mut 
                             ui,
                             cap,
                             k.label,
-                            &action_summary(a),
+                            &conflict_or(cx, &crate::config::HotkeyUse::Dismiss(wf.id, i), action_summary(a)),
                             k.icon,
                             action_color(&a.action),
                             sel_here == Some(Sel::Action(i)),
@@ -367,6 +375,25 @@ pub fn workflow_card(ui: &mut egui::Ui, idx: usize, wf: &mut Workflow, cx: &mut 
     );
     ui.painter().rect_filled(strip, 2.0, strip_color);
     sheen(ui.painter(), r, 20.0);
+}
+
+/// Sous-titre d'un bloc : l'avertissement de conflit prime.
+fn conflict_or(cx: &Ctx, u: &crate::config::HotkeyUse, normal: String) -> String {
+    if cx.conflicts.iter().any(|(c, _)| c == u) {
+        "⚠ raccourci en conflit".into()
+    } else {
+        normal
+    }
+}
+
+/// Message de conflit affiché sous un champ de raccourci.
+fn conflict_line(ui: &mut egui::Ui, cx: &Ctx, u: &crate::config::HotkeyUse) {
+    if let Some((_, msg)) = cx.conflicts.iter().find(|(c, _)| c == u) {
+        ui.horizontal(|ui| {
+            field_label(ui, "");
+            ui.label(egui::RichText::new(format!("⚠ {msg}")).color(RED));
+        });
+    }
 }
 
 fn toggle_sel(cur: Option<(u64, Sel)>, id: u64, s: Sel) -> Option<(u64, Sel)> {
@@ -418,12 +445,7 @@ fn trigger_editor(ui: &mut egui::Ui, wf: &mut Workflow, cx: &mut Ctx) {
             ));
             ui.horizontal(|ui| {
                 field_label(ui, "Délai de grâce");
-                ui.add(
-                    egui::Slider::new(grace, 0.0..=600.0)
-                        .logarithmic(true)
-                        .suffix(" s")
-                        .max_decimals(0),
-                );
+                duration_slider(ui, grace, STEPS_GRACE);
             });
         }
         Trigger::Stranger { grace, when } => {
@@ -442,7 +464,7 @@ fn trigger_editor(ui: &mut egui::Ui, wf: &mut Workflow, cx: &mut Ctx) {
             });
             ui.horizontal(|ui| {
                 field_label(ui, "Présence continue");
-                ui.add(egui::Slider::new(grace, 0.0..=60.0).suffix(" s").max_decimals(0));
+                duration_slider(ui, grace, STEPS_PRESENCE);
             });
         }
         Trigger::Return { min_absence } => {
@@ -451,12 +473,7 @@ fn trigger_editor(ui: &mut egui::Ui, wf: &mut Workflow, cx: &mut Ctx) {
             ));
             ui.horizontal(|ui| {
                 field_label(ui, "Absence minimale");
-                ui.add(
-                    egui::Slider::new(min_absence, 1.0..=600.0)
-                        .logarithmic(true)
-                        .suffix(" s")
-                        .max_decimals(0),
-                );
+                duration_slider(ui, min_absence, STEPS_RETURN);
             });
         }
         Trigger::Hotkey { combo } => {
@@ -489,17 +506,13 @@ fn trigger_editor(ui: &mut egui::Ui, wf: &mut Workflow, cx: &mut Ctx) {
                     combo.clear();
                 }
             });
+            conflict_line(ui, cx, &crate::config::HotkeyUse::Trigger(wf.id));
         }
     }
     if !matches!(wf.trigger, Trigger::Absence { .. }) {
         ui.horizontal(|ui| {
             field_label(ui, "Anti-répétition");
-            ui.add(
-                egui::Slider::new(&mut wf.cooldown, 0.0..=600.0)
-                    .logarithmic(true)
-                    .suffix(" s")
-                    .max_decimals(0),
-            );
+            duration_slider(ui, &mut wf.cooldown, STEPS_COOLDOWN);
         });
     }
 }
@@ -595,7 +608,7 @@ fn action_editor(ui: &mut egui::Ui, wf: &mut Workflow, i: usize, cx: &mut Ctx) {
         ui.horizontal(|ui| {
             field_label(ui, "Durée");
             let mut s = a.params.seconds.unwrap_or(1.0);
-            ui.add(egui::Slider::new(&mut s, 0.5..=60.0).suffix(" s").max_decimals(1));
+            duration_slider(ui, &mut s, STEPS_WAIT);
             if a.params.seconds != Some(s) {
                 a.params.seconds = Some(s);
             }
@@ -651,6 +664,7 @@ fn overlay_editor(ui: &mut egui::Ui, a: &mut ActionConf, wf_id: u64, i: usize, c
             cx.ops.push(Op::RecordAction(wf_id, i));
         }
     });
+    conflict_line(ui, cx, &crate::config::HotkeyUse::Dismiss(wf_id, i));
     ui.horizontal_top(|ui| {
         field_label(ui, "");
         // Passe à la ligne au lieu d'élargir l'inspecteur.
