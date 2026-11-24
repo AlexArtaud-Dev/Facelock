@@ -21,9 +21,18 @@ pub fn list_processes() -> Vec<ProcEntry> {
     seen.into_values().map(|name| ProcEntry { name, icon: None }).collect()
 }
 
-/// Non utilisé sous Linux (saisie dans la fenêtre).
+/// Non utilisé sous Linux : la saisie se fait dans la fenêtre.
+#[allow(dead_code)]
 pub fn record_combo() -> String {
     String::new()
+}
+
+pub fn cancel_record() {}
+
+/// Super/Windows : non visible via egui ; les raccourcis X11 l'acceptent
+/// mais on ne le capture pas dans la fenêtre.
+pub fn win_key_down() -> bool {
+    false
 }
 
 fn autostart_file() -> PathBuf {

@@ -215,6 +215,8 @@ struct App {
     logo: Option<egui::TextureHandle>,
     /// Saisie de raccourci dans la fenêtre (Linux)
     rec_tx: Option<(Sender<String>, Instant)>,
+    /// Sélecteur de fichier ouvert : (workflow, action, chemin choisi)
+    image_rx: Option<Receiver<(u64, usize, Option<std::path::PathBuf>)>>,
 }
 
 fn page_from(name: &str) -> Page {
@@ -262,6 +264,7 @@ impl App {
             pending_test: None,
             logo: None,
             rec_tx: None,
+            image_rx: None,
         };
         app.refresh_cameras(&cc.egui_ctx);
         app.refresh_profiles();
@@ -381,6 +384,22 @@ impl App {
                 self.toast(r.msg.unwrap_or_else(|| "Erreur".into()), false);
             }
         }
+        if let Some(rx) = &self.image_rx {
+            if let Ok((id, i, path)) = rx.try_recv() {
+                self.image_rx = None;
+                if let Some(path) = path {
+                    if let Some(a) = self
+                        .cfg
+                        .workflows
+                        .iter_mut()
+                        .find(|w| w.id == id)
+                        .and_then(|w| w.actions.get_mut(i))
+                    {
+                        a.params.image = path.display().to_string();
+                    }
+                }
+            }
+        }
         if let Some(rx) = &self.cam_rx {
             if let Ok(list) = rx.try_recv() {
                 self.cameras = list;
@@ -391,6 +410,7 @@ impl App {
             if let Ok(combo) = rx.try_recv() {
                 let target = *target;
                 self.recording = None;
+                self.stop_capture();
                 self.send(Cmd::PauseHotkeys { paused: false });
                 if combo.is_empty() {
                     self.toast("Enregistrement annulé : aucune touche principale reçue", false);
@@ -436,31 +456,79 @@ impl App {
         }
     }
 
-    /// Windows : capture globale (hook clavier temporaire, toutes les touches,
-    /// Win comprise). Linux : saisie dans la fenêtre (voir `capture_in_window`).
+    /// Démarre l'enregistrement d'un raccourci. Deux capteurs, le premier qui
+    /// répond l'emporte :
+    /// - dans la fenêtre FaceLock (cas normal, tous systèmes) ;
+    /// - Windows : hook clavier global, pour une combinaison tapée dans une
+    ///   autre application (il ne reçoit rien quand notre fenêtre a le focus).
     fn start_recording(&mut self, ctx: &egui::Context, target: Rec) {
         self.send(Cmd::PauseHotkeys { paused: true });
         let (tx, rx) = mpsc::channel();
         if cfg!(windows) {
-            let ctx = ctx.clone();
+            let (tx, ctx) = (tx.clone(), ctx.clone());
             std::thread::spawn(move || {
-                let _ = tx.send(winutil::record_combo());
+                let combo = winutil::record_combo();
+                // Une chaîne vide = annulé ou devancé par la saisie dans la fenêtre.
+                if !combo.is_empty() {
+                    let _ = tx.send(combo);
+                }
                 ctx.request_repaint();
             });
-        } else {
-            self.rec_tx = Some((tx, Instant::now()));
         }
+        self.rec_tx = Some((tx, Instant::now()));
         self.recording = Some((target, rx));
     }
 
-    /// Saisie d'un raccourci au clavier dans la fenêtre (Linux).
+    /// Fin de l'enregistrement : coupe l'autre capteur.
+    /// Explorateur de fichiers natif (dans un thread : l'interface reste fluide).
+    fn pick_image(&mut self, ctx: &egui::Context, id: u64, i: usize) {
+        if self.image_rx.is_some() {
+            return; // déjà ouvert
+        }
+        let current = self
+            .cfg
+            .workflows
+            .iter()
+            .find(|w| w.id == id)
+            .and_then(|w| w.actions.get(i))
+            .map(|a| a.params.image.clone())
+            .unwrap_or_default();
+        let (tx, rx) = mpsc::channel();
+        let ctx = ctx.clone();
+        std::thread::spawn(move || {
+            let mut dialog = rfd::FileDialog::new()
+                .set_title("Image de l'écran de confidentialité")
+                .add_filter("Images", &["png", "jpg", "jpeg", "webp"]);
+            if let Some(dir) = std::path::Path::new(&current).parent().filter(|d| d.is_dir()) {
+                dialog = dialog.set_directory(dir);
+            }
+            let _ = tx.send((id, i, dialog.pick_file()));
+            ctx.request_repaint();
+        });
+        self.image_rx = Some(rx);
+    }
+
+    fn stop_capture(&mut self) {
+        self.rec_tx = None;
+        winutil::cancel_record();
+    }
+
+    /// Saisie d'un raccourci au clavier dans la fenêtre.
     fn capture_in_window(&mut self, ctx: &egui::Context) {
         let Some((tx, since)) = &self.rec_tx else { return };
+        let tx = tx.clone();
         if since.elapsed() > Duration::from_secs(10) {
             let _ = tx.send(String::new());
-            self.rec_tx = None;
+            self.stop_capture();
             return;
         }
+        // Aucun champ texte ne doit recevoir la combinaison.
+        ctx.memory_mut(|m| {
+            if let Some(id) = m.focused() {
+                m.surrender_focus(id);
+            }
+        });
+        let win = winutil::win_key_down();
         let combo = ctx.input(|i| {
             i.events.iter().find_map(|e| match e {
                 egui::Event::Key {
@@ -480,6 +548,13 @@ impl App {
                     if modifiers.shift {
                         parts.push("shift".to_string());
                     }
+                    if win {
+                        parts.push("windows".to_string());
+                    }
+                    // Échap seul : annulation.
+                    if name == "esc" && parts.is_empty() {
+                        return Some(String::new());
+                    }
                     parts.push(name);
                     Some(parts.join("+"))
                 }
@@ -488,7 +563,7 @@ impl App {
         });
         if let Some(c) = combo {
             let _ = tx.send(c);
-            self.rec_tx = None;
+            self.stop_capture();
         } else {
             ctx.request_repaint_after(Duration::from_millis(100));
         }
@@ -1033,6 +1108,7 @@ impl App {
                 }
                 Op::Record(id) => self.start_recording(&ctx, Rec::Workflow(id)),
                 Op::RecordAction(id, i) => self.start_recording(&ctx, Rec::Action(id, i)),
+                Op::PickImage(id, i) => self.pick_image(&ctx, id, i),
             }
         }
     }

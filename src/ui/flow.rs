@@ -21,6 +21,8 @@ pub enum Op {
     Record(u64),
     /// Raccourci de secours d'un écran de confidentialité (workflow, action)
     RecordAction(u64, usize),
+    /// Choisir l'image d'un écran de confidentialité (explorateur de fichiers)
+    PickImage(u64, usize),
 }
 
 pub struct TriggerMeta {
@@ -620,8 +622,14 @@ fn overlay_editor(ui: &mut egui::Ui, a: &mut ActionConf, wf_id: u64, i: usize, c
         ui.add(
             egui::TextEdit::singleline(&mut a.params.image)
                 .hint_text("chemin d'une image PNG, JPEG ou WebP")
-                .desired_width(380.0),
+                .desired_width(300.0),
         );
+        if button(ui, Some(I_FOLDER), "Parcourir…", Kind::Ghost, true).clicked() {
+            cx.ops.push(Op::PickImage(wf_id, i));
+        }
+        if !a.params.image.is_empty() && icon_button(ui, I_CLOSE, "Retirer l'image", MUTED).clicked() {
+            a.params.image.clear();
+        }
     });
     ui.horizontal(|ui| {
         field_label(ui, "Raccourci de secours");
@@ -643,11 +651,18 @@ fn overlay_editor(ui: &mut egui::Ui, a: &mut ActionConf, wf_id: u64, i: usize, c
             cx.ops.push(Op::RecordAction(wf_id, i));
         }
     });
-    ui.horizontal(|ui| {
+    ui.horizontal_top(|ui| {
         field_label(ui, "");
-        ui.label(small(
-            "Ferme l'écran à tout moment, même s'il ne répond plus. Choisis une combinaison peu courante (ex. Ctrl + Alt + Maj + U).",
-        ));
+        // Passe à la ligne au lieu d'élargir l'inspecteur.
+        ui.vertical(|ui| {
+            ui.set_max_width((ui.available_width() - 8.0).max(200.0));
+            ui.add(
+                egui::Label::new(small(
+                    "Ferme l'écran à tout moment, même s'il ne répond plus. Choisis une combinaison peu courante (ex. Ctrl + Alt + Maj + U).",
+                ))
+                .wrap(),
+            );
+        });
     });
     ui.horizontal(|ui| {
         field_label(ui, "Fermeture auto");

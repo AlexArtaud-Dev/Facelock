@@ -131,6 +131,31 @@ struct Capture {
     cancelled: bool,
 }
 
+/// Demande d'arrêt de la capture (la saisie dans la fenêtre a répondu).
+static CANCEL: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+pub fn cancel_record() {
+    CANCEL.store(true, std::sync::atomic::Ordering::SeqCst);
+}
+
+/// La fenêtre au premier plan appartient-elle à ce processus ?
+fn foreground_is_us() -> bool {
+    unsafe {
+        let mut pid = 0u32;
+        GetWindowThreadProcessId(GetForegroundWindow(), Some(&mut pid));
+        pid == std::process::id()
+    }
+}
+
+/// Touche Windows enfoncée (egui ne la remonte pas dans ses modificateurs).
+pub fn win_key_down() -> bool {
+    use windows::Win32::UI::Input::KeyboardAndMouse::{GetAsyncKeyState, VK_LWIN, VK_RWIN};
+    unsafe {
+        (GetAsyncKeyState(VK_LWIN.0 as i32) as u16 & 0x8000) != 0
+            || (GetAsyncKeyState(VK_RWIN.0 as i32) as u16 & 0x8000) != 0
+    }
+}
+
 thread_local! {
     static CAPTURE: RefCell<Capture> = RefCell::new(Capture::default());
 }
@@ -157,9 +182,14 @@ unsafe extern "system" fn ll_proc(code: i32, wp: WPARAM, lp: LPARAM) -> LRESULT 
                 None => {}
             }
         });
-        // Touches avalées pendant la capture : la combinaison n'agit nulle
-        // part ailleurs (y compris les relâchements, pour ne pas ouvrir le
-        // menu Démarrer avec un « Win » orphelin).
+        // Fenêtre FaceLock au premier plan : les touches lui parviennent
+        // (c'est elle qui enregistre la combinaison).
+        if foreground_is_us() {
+            return CallNextHookEx(None, code, wp, lp);
+        }
+        // Ailleurs : touches avalées pendant la capture, la combinaison n'agit
+        // nulle part (y compris les relâchements, pour ne pas ouvrir le menu
+        // Démarrer avec un « Win » orphelin).
         return LRESULT(1);
     }
     CallNextHookEx(None, code, wp, lp)
@@ -170,6 +200,7 @@ unsafe extern "system" fn ll_proc(code: i32, wp: WPARAM, lp: LPARAM) -> LRESULT 
 /// modificateurs maintenus), au rythme de l'utilisateur. Renvoie "" en cas
 /// d'annulation (Échap) ou après 10 s sans touche principale.
 pub fn record_combo() -> String {
+    CANCEL.store(false, std::sync::atomic::Ordering::SeqCst);
     CAPTURE.with(|c| *c.borrow_mut() = Capture::default());
     unsafe {
         let Ok(hook) = SetWindowsHookExW(WH_KEYBOARD_LL, Some(ll_proc), None, 0) else {
@@ -184,7 +215,7 @@ pub fn record_combo() -> String {
                 // Fini quand tout est relâché (ou après un court délai).
                 c.done_at.is_some_and(|t| c.held == 0 || t.elapsed() >= RELEASE_GRACE)
             });
-            if finished || start.elapsed() >= CAPTURE_TIMEOUT {
+            if finished || start.elapsed() >= CAPTURE_TIMEOUT || CANCEL.load(std::sync::atomic::Ordering::SeqCst) {
                 break;
             }
             DispatchMessageW(&msg);
