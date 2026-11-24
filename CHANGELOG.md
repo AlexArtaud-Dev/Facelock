@@ -1,5 +1,17 @@
 # Changelog
 
+## [2.1.0](https://github.com/AlexArtaud-Dev/Facelock/compare/v2.0.0...v2.1.0) (2026-11-24)
+
+
+### Nouveautés
+
+* **engine:** personnes au visage caché comptées comme inconnues ([daff234](https://github.com/AlexArtaud-Dev/Facelock/commit/daff234160a9867ecfde00edf4ff67e3117671e0))
+
+
+### Corrections
+
+* **ui:** silhouettes visibles dans l'aperçu et détection plus réactive ([c93c50f](https://github.com/AlexArtaud-Dev/Facelock/commit/c93c50fc4b7cd1d293ea895d5b485934a62edf46))
+
 ## [2.0.0](https://github.com/AlexArtaud-Dev/Facelock/compare/v1.0.0...v2.0.0) (2026-11-24)
 
 
