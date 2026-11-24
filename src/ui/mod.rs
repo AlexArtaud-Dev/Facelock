@@ -169,6 +169,18 @@ enum Rec {
     Action(u64, usize),
 }
 
+impl Rec {
+    fn use_of(self) -> crate::config::HotkeyUse {
+        use crate::config::HotkeyUse as U;
+        match self {
+            Rec::Toggle => U::Toggle,
+            Rec::Reset => U::Reset,
+            Rec::Workflow(id) => U::Trigger(id),
+            Rec::Action(id, i) => U::Dismiss(id, i),
+        }
+    }
+}
+
 struct Picker {
     target: (u64, usize),
     search: String,
@@ -415,16 +427,45 @@ impl App {
                 if combo.is_empty() {
                     self.toast("Enregistrement annulé : aucune touche principale reçue", false);
                 } else {
+                    let pretty = hotkey::pretty(&combo);
                     match hotkey::parse_combo(&combo) {
-                        Ok(_) => {
-                            self.toast(format!("Raccourci enregistré : {}", hotkey::pretty(&combo)), true);
-                            self.set_combo(target, combo);
-                        }
                         Err(e) => self.toast(format!("Raccourci refusé : {e}"), false),
+                        Ok(_) => match self.cfg.hotkey_conflict(&combo, &target.use_of()) {
+                            Some(other) => self.toast(
+                                format!(
+                                    "{pretty} est déjà utilisé par {} : choisis une autre combinaison",
+                                    self.cfg.describe(&other)
+                                ),
+                                false,
+                            ),
+                            None => {
+                                self.toast(format!("Raccourci enregistré : {pretty}"), true);
+                                self.set_combo(target, combo);
+                            }
+                        },
                     }
                 }
             }
         }
+    }
+
+    /// Conflits de raccourcis déjà présents dans la config : usage -> message.
+    fn hotkey_conflicts(&self) -> Vec<(crate::config::HotkeyUse, String)> {
+        self.cfg
+            .hotkey_uses()
+            .into_iter()
+            .filter_map(|(u, combo)| {
+                let other = self.cfg.hotkey_conflict(&combo, &u)?;
+                Some((
+                    u,
+                    format!(
+                        "{} est aussi utilisé par {}",
+                        hotkey::pretty(&combo),
+                        self.cfg.describe(&other)
+                    ),
+                ))
+            })
+            .collect()
     }
 
     fn set_combo(&mut self, target: Rec, combo: String) {
@@ -1059,6 +1100,7 @@ impl App {
             Some(_) => Some(0),
             None => None,
         };
+        let conflicts = self.hotkey_conflicts();
         let recording_action = match self.recording.as_ref().map(|r| r.0) {
             Some(Rec::Action(id, i)) => Some((id, i)),
             _ => None,
@@ -1070,6 +1112,7 @@ impl App {
                 ops: &mut ops,
                 recording,
                 recording_action,
+                conflicts: &conflicts,
             };
             flow::workflow_card(ui, i, wf, &mut cx);
             ui.add_space(12.0);
@@ -1471,12 +1514,7 @@ impl App {
             "Intervalle de vérification",
             "Plus court = réaction plus rapide. ~10 ms de CPU par vérification.",
             |ui| {
-                ui.add(
-                    egui::Slider::new(&mut self.cfg.check_interval, 0.2..=10.0)
-                        .logarithmic(true)
-                        .suffix(" s")
-                        .max_decimals(1),
-                );
+                duration_slider(ui, &mut self.cfg.check_interval, STEPS_INTERVAL);
             },
         );
         setting_row(
@@ -1537,6 +1575,9 @@ impl App {
                     ui.with_layout(Layout::left_to_right(Align::Center), |ui| keycaps(ui, &combo));
                 }
             });
+            if let Some((_, msg)) = self.hotkey_conflicts().into_iter().find(|(u, _)| *u == target.use_of()) {
+                ui.label(RichText::new(format!("⚠ {msg}")).color(RED).small());
+            }
             if start {
                 self.start_recording(&ctx, target);
             }

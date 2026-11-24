@@ -418,11 +418,127 @@ impl Config {
         std::fs::write(&tmp, json)?;
         std::fs::rename(&tmp, &path)
     }
+
+    /// Tous les raccourcis configurés (non vides) et leur usage.
+    pub fn hotkey_uses(&self) -> Vec<(HotkeyUse, String)> {
+        let mut out = vec![
+            (HotkeyUse::Toggle, self.hotkeys.toggle.clone()),
+            (HotkeyUse::Reset, self.hotkeys.reset.clone()),
+        ];
+        for w in &self.workflows {
+            if let Trigger::Hotkey { combo } = &w.trigger {
+                out.push((HotkeyUse::Trigger(w.id), combo.clone()));
+            }
+            for (i, a) in w.actions.iter().enumerate() {
+                if a.action == "privacy_screen" {
+                    out.push((HotkeyUse::Dismiss(w.id, i), a.params.hotkey.clone()));
+                }
+            }
+        }
+        out.retain(|(_, c)| !c.trim().is_empty());
+        out
+    }
+
+    /// Description lisible d'un usage, pour les messages d'erreur.
+    pub fn describe(&self, u: &HotkeyUse) -> String {
+        let name = |id: &u64| {
+            self.workflows
+                .iter()
+                .find(|w| w.id == *id)
+                .map(|w| w.name.as_str())
+                .unwrap_or("?")
+        };
+        match u {
+            HotkeyUse::Toggle => "le raccourci système « Pause / reprise »".into(),
+            HotkeyUse::Reset => "le raccourci système « Réinitialiser »".into(),
+            HotkeyUse::Trigger(id) => format!("le déclencheur du workflow « {} »", name(id)),
+            HotkeyUse::Dismiss(id, _) => format!("le raccourci de secours du workflow « {} »", name(id)),
+        }
+    }
+
+    /// Autre usage incompatible de la même combinaison (quelle que soit
+    /// l'écriture : « alt+ctrl+p » = « ctrl+alt+p »). Plusieurs écrans de
+    /// confidentialité peuvent partager le même raccourci de secours.
+    pub fn hotkey_conflict(&self, combo: &str, me: &HotkeyUse) -> Option<HotkeyUse> {
+        let key = crate::hotkey::parse_combo(combo).ok()?;
+        self.hotkey_uses()
+            .into_iter()
+            .map(|(u, c)| (u, crate::hotkey::parse_combo(&c).ok()))
+            .find_map(|(u, k)| {
+                let both_dismiss = matches!((&u, me), (HotkeyUse::Dismiss(..), HotkeyUse::Dismiss(..)));
+                (u != *me && k == Some(key) && !both_dismiss).then_some(u)
+            })
+    }
+}
+
+/// À quoi sert un raccourci (pour détecter les doublons).
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub enum HotkeyUse {
+    Toggle,
+    Reset,
+    /// Déclencheur « Raccourci clavier » d'un workflow
+    Trigger(u64),
+    /// Raccourci de secours d'un écran de confidentialité (workflow, action)
+    Dismiss(u64, usize),
+}
+
+impl HotkeyUse {
+    /// Workflow concerné, le cas échéant.
+    pub fn workflow(&self) -> Option<u64> {
+        match self {
+            HotkeyUse::Trigger(id) | HotkeyUse::Dismiss(id, _) => Some(*id),
+            _ => None,
+        }
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn detects_duplicate_hotkeys() {
+        let mut c = Config::default();
+        c.hotkeys.toggle = "ctrl+alt+p".into();
+        let mut panic = Workflow {
+            name: "Panic".into(),
+            trigger: Trigger::Hotkey {
+                combo: "ctrl+alt+w".into(),
+            },
+            ..Workflow::default()
+        };
+        let mut a = action("privacy_screen");
+        a.params.hotkey = "ctrl+alt+shift+u".into();
+        panic.actions = vec![a.clone()];
+        let other = Workflow {
+            name: "Autre".into(),
+            actions: vec![a],
+            ..Workflow::default()
+        };
+        let (pid, oid) = (panic.id, other.id);
+        c.workflows = vec![panic, other];
+
+        // Même combinaison écrite autrement que le raccourci système
+        assert_eq!(
+            c.hotkey_conflict("alt+ctrl+p", &HotkeyUse::Trigger(oid)),
+            Some(HotkeyUse::Toggle)
+        );
+        // Le déclencheur de « Panic » est pris par un autre workflow
+        assert_eq!(
+            c.hotkey_conflict("ctrl+alt+w", &HotkeyUse::Trigger(oid)),
+            Some(HotkeyUse::Trigger(pid))
+        );
+        // Réenregistrer la même combinaison au même endroit : pas de conflit
+        assert_eq!(c.hotkey_conflict("ctrl+alt+w", &HotkeyUse::Trigger(pid)), None);
+        // Deux écrans de confidentialité peuvent partager leur raccourci de secours…
+        assert_eq!(c.hotkey_conflict("ctrl+alt+shift+u", &HotkeyUse::Dismiss(oid, 0)), None);
+        // … mais pas avec un déclencheur
+        assert!(matches!(
+            c.hotkey_conflict("ctrl+alt+shift+u", &HotkeyUse::Trigger(oid)),
+            Some(HotkeyUse::Dismiss(..))
+        ));
+        assert!(c.describe(&HotkeyUse::Trigger(pid)).contains("« Panic »"));
+    }
 
     const V1: &str = r#"{
         "camera_index": 0, "check_interval": 0.5, "match_threshold": 0.363,
