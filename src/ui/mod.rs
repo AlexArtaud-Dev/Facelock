@@ -1931,22 +1931,31 @@ fn video(
                     rect.min + Vec2::new(f.bbox[0] * sx, f.bbox[1] * sy),
                     Vec2::new(f.bbox[2] * sx, f.bbox[3] * sy),
                 );
-                let color = if f.hidden {
-                    ORANGE
-                } else if f.name.is_some() {
-                    GREEN
-                } else {
-                    RED
+                // Silhouettes : trait fin, étiquette en bas ; visages : trait épais en haut.
+                let (color, width, text) = match f.silhouette {
+                    1 => (GREEN.gamma_multiply(0.8), 1.5, "Toi · silhouette".to_string()),
+                    2 => (ORANGE.gamma_multiply(0.8), 1.5, "Personne · vérification…".to_string()),
+                    3 => (ORANGE, 3.0, "Visage caché · inconnu".to_string()),
+                    4 => (MUTED, 1.0, "Trop loin · ignorée".to_string()),
+                    _ => match &f.name {
+                        Some(n) if n.is_empty() => {
+                            painter.rect_stroke(r, 10.0, Stroke::new(2.5, GREEN), StrokeKind::Outside);
+                            continue;
+                        }
+                        Some(n) => (GREEN, 2.5, format!("{n}  {:.0} %", f.score * 100.0)),
+                        None => (RED, 2.5, format!("Inconnu  {:.0} %", f.score.max(0.0) * 100.0)),
+                    },
                 };
-                painter.rect_stroke(r, 10.0, Stroke::new(2.5, color), StrokeKind::Outside);
-                let text = match &f.name {
-                    _ if f.hidden => "Visage caché · inconnu".to_string(),
-                    Some(n) if n.is_empty() => continue,
-                    Some(n) => format!("{n}  {:.0} %", f.score * 100.0),
-                    None => format!("Inconnu  {:.0} %", f.score.max(0.0) * 100.0),
-                };
+                painter.rect_stroke(r, 10.0, Stroke::new(width, color), StrokeKind::Outside);
                 let galley = painter.layout_no_wrap(text, FontId::new(12.5, semibold()), Color32::WHITE);
-                let pos = egui::pos2(r.min.x, (r.min.y - galley.size().y - 10.0).max(rect.min.y + 4.0));
+                let pos = if f.silhouette == 0 {
+                    egui::pos2(r.min.x, (r.min.y - galley.size().y - 10.0).max(rect.min.y + 4.0))
+                } else {
+                    egui::pos2(
+                        r.min.x + 6.0,
+                        (r.max.y - galley.size().y - 12.0).min(rect.max.y - galley.size().y - 10.0),
+                    )
+                };
                 let bg = egui::Rect::from_min_size(pos, galley.size() + Vec2::new(14.0, 6.0));
                 painter.rect_filled(bg, 8.0, color);
                 painter.galley(pos + Vec2::new(7.0, 3.0), galley, Color32::WHITE);

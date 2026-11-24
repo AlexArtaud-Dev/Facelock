@@ -10,7 +10,7 @@ use crate::camera::{self, Camera};
 use crate::config::{Config, StrangerWhen, Trigger, Workflow};
 use crate::engine::{box_iou, Engine, Face, Frame, EMB};
 use crate::ipc::{EnrollInfo, FaceBox};
-use crate::presence::Presence;
+use crate::presence::{Presence, Silhouette};
 use crate::state::{MonCmd, Published, Shared};
 use std::collections::HashMap;
 use std::sync::atomic::Ordering;
@@ -27,8 +27,10 @@ const ENROLL_PERIOD: Duration = Duration::from_millis(66);
 const MIN_SAMPLES: usize = 5;
 /// Intervalle minimal entre deux détections de personnes.
 const PEOPLE_PERIOD: Duration = Duration::from_millis(1500);
+/// Idem quand l'aperçu caméra est affiché.
+const PEOPLE_PERIOD_PREVIEW: Duration = Duration::from_millis(500);
 /// Score minimal d'une silhouette (NanoDet, classe « person »).
-const PERSON_SCORE: f32 = 0.45;
+const PERSON_SCORE: f32 = 0.35;
 
 struct Tracked {
     bbox: [f32; 4],
@@ -400,6 +402,7 @@ impl Mon {
                 name,
                 score,
                 hidden: false,
+                silhouette: 0,
             });
         }
         self.tracked = tracked;
@@ -417,9 +420,16 @@ impl Mon {
                     .workflows
                     .iter()
                     .any(|w| w.enabled && matches!(w.trigger, Trigger::Stranger { .. })));
+        // Aperçu ouvert : analyse plus fréquente pour un retour visuel réactif.
+        let period = if self.sh.frame_wanted() {
+            PEOPLE_PERIOD_PREVIEW
+        } else {
+            PEOPLE_PERIOD
+        };
         if !wanted {
             self.hidden.clear();
-        } else if self.last_people.is_none_or(|t| now.duration_since(t) >= PEOPLE_PERIOD) {
+            self.presence.view.clear();
+        } else if self.last_people.is_none_or(|t| now.duration_since(t) >= period) {
             self.last_people = Some(now);
             match self.engine.detect_people(&frame, PERSON_SCORE) {
                 Ok(people) => {
@@ -436,15 +446,26 @@ impl Mon {
                 Err(e) => self.sh.log(format!("[erreur] Détection de personnes : {e}")),
             }
         }
-        for b in &self.hidden {
-            results.push(FaceBox {
-                bbox: *b,
-                name: None,
-                score: 0.0,
-                hidden: true,
-            });
+        let stranger = results.iter().any(|r| r.name.is_none()) || !self.hidden.is_empty();
+        // Cadres de silhouettes pour l'aperçu (n'influencent pas les déclencheurs).
+        if self.sh.frame_wanted() {
+            for (b, state) in &self.presence.view {
+                let code = match state {
+                    Silhouette::FaceVisible => continue,
+                    Silhouette::Me => 1,
+                    Silhouette::Pending => 2,
+                    Silhouette::Hidden => 3,
+                    Silhouette::TooFar => 4,
+                };
+                results.push(FaceBox {
+                    bbox: *b,
+                    name: None,
+                    score: 0.0,
+                    hidden: code == 3,
+                    silhouette: code,
+                });
+            }
         }
-        let stranger = results.iter().any(|r| r.name.is_none());
         self.publish(frame, results);
         self.triggers(me, stranger, now, &cfg);
         Duration::from_secs_f64(cfg.check_interval)
@@ -544,6 +565,7 @@ impl Mon {
                 name: one.then(String::new),
                 score: f.score,
                 hidden: false,
+                silhouette: 0,
             })
             .collect();
         // On garde la frame courante pour une éventuelle capture ; l'image

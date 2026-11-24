@@ -30,9 +30,26 @@ struct Track {
     hidden_since: Option<Instant>,
 }
 
+/// État d'une silhouette, pour l'aperçu caméra.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Silhouette {
+    /// Toi (visage reconnu, ou silhouette suivie depuis)
+    Me,
+    /// Visage visible : la reconnaissance faciale décide
+    FaceVisible,
+    /// Sans visage, en cours de confirmation
+    Pending,
+    /// Sans visage depuis assez longtemps : inconnue
+    Hidden,
+    /// Trop loin de l'écran (ignorée)
+    TooFar,
+}
+
 #[derive(Default)]
 pub struct Presence {
     tracks: Vec<Track>,
+    /// Silhouettes de la dernière analyse et leur état
+    pub view: Vec<([f32; 4], Silhouette)>,
 }
 
 /// Le centre du visage est-il dans la silhouette ?
@@ -44,6 +61,7 @@ fn contains_face(person: &[f32; 4], face: &[f32; 4]) -> bool {
 impl Presence {
     pub fn clear(&mut self) {
         self.tracks.clear();
+        self.view.clear();
     }
 
     /// Met à jour le suivi et renvoie les silhouettes inconnues au visage caché.
@@ -62,6 +80,10 @@ impl Presence {
     ) -> Vec<[f32; 4]> {
         let mut next: Vec<Track> = Vec::new();
         let mut hidden = Vec::new();
+        self.view.clear();
+        for p in people.iter().filter(|p| p[3] < min_height * frame_h) {
+            self.view.push((*p, Silhouette::TooFar));
+        }
         for p in people.iter().filter(|p| p[3] >= min_height * frame_h) {
             // Suivi : la silhouette précédente qui recouvre le plus celle-ci.
             let prev = self
@@ -83,9 +105,17 @@ impl Presence {
             } else {
                 Some(prev.as_ref().and_then(|t| t.hidden_since).unwrap_or(now))
             };
-            if hidden_since.is_some_and(|t| now.duration_since(t) >= HIDDEN_CONFIRM) {
+            let state = if me {
+                Silhouette::Me
+            } else if !inside.is_empty() {
+                Silhouette::FaceVisible
+            } else if hidden_since.is_some_and(|t| now.duration_since(t) >= HIDDEN_CONFIRM) {
                 hidden.push(*p);
-            }
+                Silhouette::Hidden
+            } else {
+                Silhouette::Pending
+            };
+            self.view.push((*p, state));
             next.push(Track {
                 bbox: *p,
                 me,
@@ -131,6 +161,20 @@ mod tests {
                 "toujours moi après {t} ms"
             );
         }
+    }
+
+    #[test]
+    fn view_reports_each_silhouette_state() {
+        let (mut p, t0) = (Presence::default(), Instant::now());
+        let far = [500.0, 200.0, 40.0, 90.0];
+        let behind = [20.0, 60.0, 170.0, 380.0];
+        p.update(&[ME, behind, far], &[(MY_FACE, true)], H, 0.3, t0);
+        let states: Vec<Silhouette> = p.view.iter().map(|v| v.1).collect();
+        assert!(states.contains(&Silhouette::Me));
+        assert!(states.contains(&Silhouette::Pending));
+        assert!(states.contains(&Silhouette::TooFar));
+        p.update(&[ME, behind], &[(MY_FACE, true)], H, 0.3, at(t0, 3000));
+        assert!(p.view.contains(&(behind, Silhouette::Hidden)));
     }
 
     #[test]

@@ -154,6 +154,10 @@ pub struct FaceBox {
     /// Silhouette sans visage visible, comptée comme inconnue
     #[serde(default)]
     pub hidden: bool,
+    /// Cadre de silhouette (aperçu) : 0 = visage, 1 = toi, 2 = vérification,
+    /// 3 = inconnue au visage caché, 4 = trop loin
+    #[serde(default)]
+    pub silhouette: u8,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, Default)]
