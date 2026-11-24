@@ -1530,6 +1530,31 @@ impl App {
                 );
             },
         );
+        setting_row(
+            ui,
+            I_FACE,
+            "Personnes au visage caché",
+            "Une personne proche dont le visage n'est pas visible (de dos, masquée…) compte comme inconnue. Toi, tu restes reconnu même tête tournée.",
+            |ui| {
+                toggle(ui, &mut self.cfg.hidden_faces.enabled);
+            },
+        );
+        if self.cfg.hidden_faces.enabled {
+            setting_row(
+                ui,
+                I_EYE,
+                "Distance de détection",
+                "Proche : juste devant l'écran. Large : aussi les personnes un peu plus loin (plus de fausses alertes en open space).",
+                |ui| {
+                    for (v, label) in [(0.15, "Large"), (0.3, "Moyenne"), (0.5, "Proche")] {
+                        let sel = (self.cfg.hidden_faces.min_height - v).abs() < 0.01;
+                        if chip(ui, sel, None, label, ACCENT).clicked() {
+                            self.cfg.hidden_faces.min_height = v;
+                        }
+                    }
+                },
+            );
+        }
 
         section(ui, "Raccourcis système");
         for (target, title, desc) in [
@@ -1572,7 +1597,7 @@ impl App {
                 } else if combo.is_empty() {
                     ui.label(muted("non défini"));
                 } else {
-                    ui.with_layout(Layout::left_to_right(Align::Center), |ui| keycaps(ui, &combo));
+                    keycaps(ui, &combo);
                 }
             });
             if let Some((_, msg)) = self.hotkey_conflicts().into_iter().find(|(u, _)| *u == target.use_of()) {
@@ -1906,9 +1931,16 @@ fn video(
                     rect.min + Vec2::new(f.bbox[0] * sx, f.bbox[1] * sy),
                     Vec2::new(f.bbox[2] * sx, f.bbox[3] * sy),
                 );
-                let color = if f.name.is_some() { GREEN } else { RED };
+                let color = if f.hidden {
+                    ORANGE
+                } else if f.name.is_some() {
+                    GREEN
+                } else {
+                    RED
+                };
                 painter.rect_stroke(r, 10.0, Stroke::new(2.5, color), StrokeKind::Outside);
                 let text = match &f.name {
+                    _ if f.hidden => "Visage caché · inconnu".to_string(),
                     Some(n) if n.is_empty() => continue,
                     Some(n) => format!("{n}  {:.0} %", f.score * 100.0),
                     None => format!("Inconnu  {:.0} %", f.score.max(0.0) * 100.0),

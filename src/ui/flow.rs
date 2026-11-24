@@ -449,7 +449,9 @@ fn trigger_editor(ui: &mut egui::Ui, wf: &mut Workflow, cx: &mut Ctx) {
             });
         }
         Trigger::Stranger { grace, when } => {
-            ui.label(muted("Se déclenche quand un visage non enrôlé est détecté."));
+            ui.label(muted(
+                "Se déclenche quand un visage non enrôlé est détecté, ou une personne proche au visage caché (voir Réglages).",
+            ));
             ui.horizontal(|ui| {
                 field_label(ui, "Condition");
                 for (w, l) in [

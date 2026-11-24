@@ -256,6 +256,8 @@ pub struct Config {
     pub capture_size: [u32; 2],
     pub detect_size: [u32; 2],
     pub stranger_cooldown: f64,
+    /// Personnes au visage caché comptées comme inconnues
+    pub hidden_faces: HiddenFaces,
     pub hotkeys: Hotkeys,
     pub notifications: Notifications,
     pub workflows: Vec<Workflow>,
@@ -264,6 +266,24 @@ pub struct Config {
     pub panic: Option<Panic>,
     #[serde(skip_serializing)]
     pub triggers: Option<Triggers>,
+}
+
+/// Détection des personnes dont le visage n'est pas visible.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+#[serde(default)]
+pub struct HiddenFaces {
+    pub enabled: bool,
+    /// Hauteur minimale de la silhouette, en fraction de l'image (proximité)
+    pub min_height: f32,
+}
+
+impl Default for HiddenFaces {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            min_height: 0.3,
+        }
+    }
 }
 
 impl Default for Config {
@@ -277,6 +297,7 @@ impl Default for Config {
             capture_size: [640, 480],
             detect_size: [320, 240],
             stranger_cooldown: 20.0,
+            hidden_faces: HiddenFaces::default(),
             hotkeys: Hotkeys::default(),
             notifications: Notifications::default(),
             workflows: vec![Workflow {

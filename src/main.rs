@@ -18,6 +18,7 @@ mod hotkey;
 mod icon;
 mod ipc;
 mod monitor;
+mod presence;
 mod state;
 mod ui;
 mod winutil;

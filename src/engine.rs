@@ -1,7 +1,9 @@
-//! Détection (YuNet) + reconnaissance (SFace), inférence 100 % Rust via tract.
+//! Détection (YuNet) + reconnaissance (SFace) + détection de personnes
+//! (NanoDet), inférence 100 % Rust via tract.
 //!
 //! Le pré/post-traitement reproduit celui d'OpenCV (FaceDetectorYN /
-//! FaceRecognizerSF) : mêmes modèles, mêmes seuils, mêmes empreintes.
+//! FaceRecognizerSF, démo NanoDet d'opencv_zoo) : mêmes modèles, mêmes
+//! seuils, mêmes résultats.
 
 use std::path::Path;
 use std::sync::Arc;
@@ -9,6 +11,23 @@ use tract_onnx::prelude::*;
 
 static YUNET: &[u8] = include_bytes!("../models/yunet.onnx");
 static SFACE: &[u8] = include_bytes!("../models/sface.onnx");
+static NANODET: &[u8] = include_bytes!("../models/nanodet.onnx");
+
+/// NanoDet : entrée 416x416 BGR normalisée, 3 échelles, 80 classes COCO.
+const PERSON_SIZE: usize = 416;
+const PERSON_STRIDES: [usize; 3] = [8, 16, 32];
+const PERSON_MEAN: [f32; 3] = [103.53, 116.28, 123.675];
+const PERSON_STD: [f32; 3] = [57.375, 57.12, 58.395];
+const PERSON_REG_MAX: usize = 7;
+const PERSON_NMS: f32 = 0.6;
+
+/// Personne détectée (classe COCO « person »).
+#[derive(Clone, Debug)]
+pub struct Person {
+    /// x, y, w, h en pixels de la frame d'origine
+    pub bbox: [f32; 4],
+    pub score: f32,
+}
 
 pub const EMB: usize = 128;
 const SCORE_THRESHOLD: f32 = 0.8;
@@ -42,6 +61,8 @@ pub struct Profile {
 pub struct Engine {
     detector: Option<(usize, usize, Plan)>,
     recognizer: Plan,
+    /// Chargé à la première utilisation (option « visages cachés »).
+    people: Option<Plan>,
     pub profiles: Vec<Profile>,
 }
 
@@ -56,6 +77,19 @@ fn load_detector(pw: usize, ph: usize) -> TractResult<Plan> {
     }
     model
         .with_input_fact(0, f32::fact([1, 3, ph, pw]).into())?
+        .into_optimized()?
+        .into_runnable()
+}
+
+fn load_people() -> TractResult<Plan> {
+    let mut model = tract_onnx::onnx().model_for_read(&mut &NANODET[..])?;
+    for node in model.nodes.iter_mut() {
+        for out in node.outputs.iter_mut() {
+            out.fact = InferenceFact::default();
+        }
+    }
+    model
+        .with_input_fact(0, f32::fact([1, 3, PERSON_SIZE, PERSON_SIZE]).into())?
         .into_optimized()?
         .into_runnable()
 }
@@ -124,10 +158,101 @@ impl Engine {
         let mut e = Engine {
             detector: None,
             recognizer: load_recognizer()?,
+            people: None,
             profiles: Vec::new(),
         };
         e.reload_profiles();
         Ok(e)
+    }
+
+    /// Détection des personnes (NanoDet, classe « person »), coordonnées
+    /// dans la frame d'origine. Letterbox 416x416 comme la démo OpenCV.
+    pub fn detect_people(&mut self, f: &Frame, min_score: f32) -> TractResult<Vec<Person>> {
+        if self.people.is_none() {
+            self.people = Some(load_people()?);
+        }
+        let plan = self.people.as_ref().unwrap().clone();
+        let n = PERSON_SIZE;
+        // Letterbox : grand côté à 416, bandes noires centrées.
+        let (neww, newh) = if f.w >= f.h {
+            (n, ((n * f.h) as f32 / f.w as f32).round().max(1.0) as usize)
+        } else {
+            (((n * f.w) as f32 / f.h as f32).round().max(1.0) as usize, n)
+        };
+        let (left, top) = ((n - neww) / 2, (n - newh) / 2);
+        let (sx, sy) = (f.w as f32 / neww as f32, f.h as f32 / newh as f32);
+        let plane = n * n;
+        let mut input = vec![0f32; 3 * plane];
+        for (c, chunk) in input.chunks_exact_mut(plane).enumerate() {
+            chunk.fill((0.0 - PERSON_MEAN[c]) / PERSON_STD[c]);
+        }
+        let mut px = [0f32; 3];
+        for y in 0..newh {
+            let fy = ((y as f32 + 0.5) * sy - 0.5).clamp(0.0, f.h as f32 - 1.0);
+            for x in 0..neww {
+                let fx = ((x as f32 + 0.5) * sx - 0.5).clamp(0.0, f.w as f32 - 1.0);
+                sample_bilinear(f, fx, fy, &mut px);
+                let i = (y + top) * n + x + left;
+                for c in 0..3 {
+                    input[c * plane + i] = (px[c] - PERSON_MEAN[c]) / PERSON_STD[c];
+                }
+            }
+        }
+        let tensor = Tensor::from_shape(&[1, 3, n, n], &input)?;
+        let outs = plan.run(tvec!(tensor.into()))?;
+
+        let mut found: Vec<Person> = Vec::new();
+        let bins = PERSON_REG_MAX + 1;
+        for (lvl, stride) in PERSON_STRIDES.into_iter().enumerate() {
+            let cls = outs[lvl].try_as_plain_ram()?.as_slice::<f32>()?;
+            let reg = outs[PERSON_STRIDES.len() + lvl].try_as_plain_ram()?.as_slice::<f32>()?;
+            let side = n / stride;
+            let classes = cls.len() / (side * side);
+            for i in 0..side * side {
+                let scores = &cls[i * classes..(i + 1) * classes];
+                let person = scores[0];
+                // Classe dominante = personne, au-dessus du seuil.
+                if person < min_score || scores.iter().skip(1).any(|&s| s > person) {
+                    continue;
+                }
+                let (cx, cy) = (
+                    (i % side * stride) as f32 + 0.5 * (stride as f32 - 1.0),
+                    (i / side * stride) as f32 + 0.5 * (stride as f32 - 1.0),
+                );
+                // Distribution focale généralisée : espérance de 8 cases par côté.
+                let mut d = [0f32; 4];
+                for (k, dk) in d.iter_mut().enumerate() {
+                    let r = &reg[i * 4 * bins + k * bins..i * 4 * bins + (k + 1) * bins];
+                    let m = r.iter().copied().fold(f32::MIN, f32::max);
+                    let e: Vec<f32> = r.iter().map(|v| (v - m).exp()).collect();
+                    let sum: f32 = e.iter().sum();
+                    *dk = e.iter().enumerate().map(|(j, v)| j as f32 * v).sum::<f32>() / sum * stride as f32;
+                }
+                let x1 = (cx - d[0]).clamp(0.0, n as f32);
+                let y1 = (cy - d[1]).clamp(0.0, n as f32);
+                let x2 = (cx + d[2]).clamp(0.0, n as f32);
+                let y2 = (cy + d[3]).clamp(0.0, n as f32);
+                // Retour aux coordonnées de la frame (dé-letterbox).
+                let bx1 = ((x1 - left as f32) * sx).clamp(0.0, f.w as f32);
+                let by1 = ((y1 - top as f32) * sy).clamp(0.0, f.h as f32);
+                let bx2 = ((x2 - left as f32) * sx).clamp(0.0, f.w as f32);
+                let by2 = ((y2 - top as f32) * sy).clamp(0.0, f.h as f32);
+                if bx2 > bx1 && by2 > by1 {
+                    found.push(Person {
+                        bbox: [bx1, by1, bx2 - bx1, by2 - by1],
+                        score: person,
+                    });
+                }
+            }
+        }
+        found.sort_by(|a, b| b.score.total_cmp(&a.score));
+        let mut kept: Vec<Person> = Vec::new();
+        for p in found {
+            if kept.iter().all(|k| iou(&k.bbox, &p.bbox) <= PERSON_NMS) {
+                kept.push(p);
+            }
+        }
+        Ok(kept)
     }
 
     /// Détection des visages (YuNet), coordonnées dans la frame d'origine.

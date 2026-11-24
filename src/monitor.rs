@@ -10,6 +10,7 @@ use crate::camera::{self, Camera};
 use crate::config::{Config, StrangerWhen, Trigger, Workflow};
 use crate::engine::{box_iou, Engine, Face, Frame, EMB};
 use crate::ipc::{EnrollInfo, FaceBox};
+use crate::presence::Presence;
 use crate::state::{MonCmd, Published, Shared};
 use std::collections::HashMap;
 use std::sync::atomic::Ordering;
@@ -24,6 +25,10 @@ const TRACK_IOU: f32 = 0.6;
 const FAR: Duration = Duration::from_secs(3600);
 const ENROLL_PERIOD: Duration = Duration::from_millis(66);
 const MIN_SAMPLES: usize = 5;
+/// Intervalle minimal entre deux détections de personnes.
+const PEOPLE_PERIOD: Duration = Duration::from_millis(1500);
+/// Score minimal d'une silhouette (NanoDet, classe « person »).
+const PERSON_SCORE: f32 = 0.45;
 
 struct Tracked {
     bbox: [f32; 4],
@@ -75,6 +80,10 @@ struct Mon {
     enroll: Option<Enroll>,
     seq: u64,
     cam_error_logged: bool,
+    /// Suivi des silhouettes (personnes au visage caché)
+    presence: Presence,
+    last_people: Option<Instant>,
+    hidden: Vec<[f32; 4]>,
 }
 
 /// Exécute les actions d'un workflow dans un thread dédié (une action
@@ -135,6 +144,9 @@ pub fn run(sh: Arc<Shared>, rx: Receiver<MonCmd>) {
         enroll: None,
         seq: 0,
         cam_error_logged: false,
+        presence: Presence::default(),
+        last_people: None,
+        hidden: Vec::new(),
     };
     let mut next = Instant::now();
     loop {
@@ -249,6 +261,9 @@ impl Mon {
         self.trig.me_present = true;
         self.trig.absent_start = None;
         self.tracked.clear();
+        self.presence.clear();
+        self.hidden.clear();
+        self.last_people = None;
     }
 
     fn ensure_camera(&mut self) -> bool {
@@ -384,6 +399,7 @@ impl Mon {
                 bbox: face.bbox,
                 name,
                 score,
+                hidden: false,
             });
         }
         self.tracked = tracked;
@@ -391,6 +407,42 @@ impl Mon {
         let me = results.iter().any(|r| r.name.is_some());
         if me {
             crate::daemon::on_authorized_face();
+        }
+        // Personnes au visage caché (seulement si un workflow « Visage
+        // inconnu » est actif ou si l'aperçu est affiché ; au plus toutes les
+        // PEOPLE_PERIOD : ~35 ms par analyse).
+        let wanted = cfg.hidden_faces.enabled
+            && (self.sh.frame_wanted()
+                || cfg
+                    .workflows
+                    .iter()
+                    .any(|w| w.enabled && matches!(w.trigger, Trigger::Stranger { .. })));
+        if !wanted {
+            self.hidden.clear();
+        } else if self.last_people.is_none_or(|t| now.duration_since(t) >= PEOPLE_PERIOD) {
+            self.last_people = Some(now);
+            match self.engine.detect_people(&frame, PERSON_SCORE) {
+                Ok(people) => {
+                    let boxes: Vec<[f32; 4]> = people.iter().map(|p| p.bbox).collect();
+                    let faces: Vec<([f32; 4], bool)> = results.iter().map(|r| (r.bbox, r.name.is_some())).collect();
+                    let hidden = self
+                        .presence
+                        .update(&boxes, &faces, frame.h as f32, cfg.hidden_faces.min_height, now);
+                    if !hidden.is_empty() && self.hidden.is_empty() {
+                        self.sh.log("Personne au visage caché détectée");
+                    }
+                    self.hidden = hidden;
+                }
+                Err(e) => self.sh.log(format!("[erreur] Détection de personnes : {e}")),
+            }
+        }
+        for b in &self.hidden {
+            results.push(FaceBox {
+                bbox: *b,
+                name: None,
+                score: 0.0,
+                hidden: true,
+            });
         }
         let stranger = results.iter().any(|r| r.name.is_none());
         self.publish(frame, results);
@@ -491,6 +543,7 @@ impl Mon {
                 bbox: f.bbox,
                 name: one.then(String::new),
                 score: f.score,
+                hidden: false,
             })
             .collect();
         // On garde la frame courante pour une éventuelle capture ; l'image

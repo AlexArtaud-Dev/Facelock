@@ -345,17 +345,24 @@ pub fn inset<R>(ui: &mut egui::Ui, add: impl FnOnce(&mut egui::Ui) -> R) -> R {
 pub fn setting_row(ui: &mut egui::Ui, ic: char, title: &str, desc: &str, control: impl FnOnce(&mut egui::Ui)) {
     inset(ui, |ui| {
         ui.horizontal(|ui| {
-            ui.add_space(2.0);
-            ui.label(icon(ic, 18.0).color(MUTED));
-            ui.add_space(6.0);
-            ui.vertical(|ui| {
-                ui.spacing_mut().item_spacing.y = 2.0;
-                ui.label(RichText::new(title).color(TEXT));
-                if !desc.is_empty() {
-                    ui.label(small(desc));
-                }
+            // Contrôles d'abord (à droite), le texte occupe la place restante
+            // et passe à la ligne au lieu de passer dessous.
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                control(ui);
+                ui.add_space(16.0);
+                ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
+                    ui.add_space(2.0);
+                    ui.label(icon(ic, 18.0).color(MUTED));
+                    ui.add_space(6.0);
+                    ui.vertical(|ui| {
+                        ui.spacing_mut().item_spacing.y = 2.0;
+                        ui.label(RichText::new(title).color(TEXT));
+                        if !desc.is_empty() {
+                            ui.add(egui::Label::new(small(desc)).wrap());
+                        }
+                    });
+                });
             });
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), control);
         });
     });
 }
@@ -582,9 +589,17 @@ pub fn icon_disc(p: &egui::Painter, center: egui::Pos2, radius: f32, color: Colo
 }
 
 /// Combinaison affichée en touches de clavier.
+/// Dans une mise en page de droite à gauche, l'ordre est inversé pour que
+/// la combinaison se lise toujours « Ctrl + Alt + P ».
 pub fn keycaps(ui: &mut egui::Ui, combo: &str) {
     ui.spacing_mut().item_spacing.x = 4.0;
-    for (i, part) in crate::hotkey::pretty(combo).split(" + ").enumerate() {
+    let pretty = crate::hotkey::pretty(combo);
+    let mut parts: Vec<&str> = pretty.split(" + ").collect();
+    let rtl = ui.layout().prefer_right_to_left();
+    if rtl {
+        parts.reverse();
+    }
+    for (i, part) in parts.into_iter().enumerate() {
         if i > 0 {
             ui.label(small("+"));
         }

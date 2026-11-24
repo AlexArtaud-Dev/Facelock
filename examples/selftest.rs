@@ -56,9 +56,35 @@ fn synthetic(e: &mut engine::Engine) {
 
 fn main() {
     let mut e = engine::Engine::new().expect("chargement des modèles");
-    let paths: Vec<String> = std::env::args().skip(1).collect();
+    let mut paths: Vec<String> = std::env::args().skip(1).collect();
     if paths.is_empty() {
         return synthetic(&mut e);
+    }
+    // --people a.jpg … : personnes détectées (x1, y1, x2, y2, score) en JSON
+    if paths[0] == "--people" {
+        paths.remove(0);
+        let mut out = Vec::new();
+        for path in paths {
+            let f = load(&path);
+            let t = std::time::Instant::now();
+            let people = e.detect_people(&f, 0.35).unwrap();
+            eprintln!("{path}: {} personne(s) en {:?}", people.len(), t.elapsed());
+            let boxes: Vec<[f32; 5]> = people
+                .iter()
+                .map(|p| {
+                    [
+                        p.bbox[0],
+                        p.bbox[1],
+                        p.bbox[0] + p.bbox[2],
+                        p.bbox[1] + p.bbox[3],
+                        p.score,
+                    ]
+                })
+                .collect();
+            out.push(serde_json::json!({"path": path, "boxes": boxes}));
+        }
+        println!("{}", serde_json::to_string(&out).unwrap());
+        return;
     }
     let mut out = Vec::new();
     for path in paths {

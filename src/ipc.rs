@@ -151,6 +151,9 @@ pub struct FaceBox {
     pub bbox: [f32; 4],
     pub name: Option<String>,
     pub score: f32,
+    /// Silhouette sans visage visible, comptée comme inconnue
+    #[serde(default)]
+    pub hidden: bool,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, Default)]

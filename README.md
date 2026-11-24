@@ -24,6 +24,7 @@ You get up, you forget `Win+L`, and your screen tells your life story to the who
 ## ✨ Features
 
 - 🎯 **Recognition, not just detection**: only enrolled faces count as "you".
+- 🥷 **Hidden faces count too**: a person close to the screen whose face can't be seen (turned away, masked, hiding) is treated as a stranger. You stay "you" when you turn your head, thanks to silhouette tracking.
 - ⚡ **Visual workflows**: a trigger (*I step away*, *unknown face*, *I'm back*, *keyboard shortcut*) followed by a chain of actions. You build them block by block, enable each one on its own, or start from 9 ready-made templates.
 - 🛡️ **Privacy screen**: an "Access denied" message or your own image, full screen, on top of everything else. It closes with a **mandatory emergency shortcut** (which still works if the screen freezes), or automatically when you come back.
 - 🧰 **13 actions**: lock, privacy screen, switch virtual desktop, show desktop, minimize / close / move an app (by process and window title), play/pause, mute, turn the screen off, sleep, notification, wait.
@@ -66,7 +67,7 @@ facelock --quit             stop the service
 ```
 facelock               resident service, no graphics library loaded
 ├─ system              tray, global shortcuts, lock events (Win32/WTS or SNI/X11/logind)
-├─ monitor             webcam → YuNet → SFace → triggers → workflows
+├─ monitor             webcam → YuNet → SFace (+ NanoDet people) → triggers → workflows
 └─ ipc                 named pipe (Windows) / Unix socket 0600 (Linux)
 
 facelock --ui          egui interface, started on demand, memory freed when closed
@@ -79,7 +80,8 @@ The monitor sleeps between checks and wakes up instantly on any command. A face 
 |---|---|
 | `src/daemon/` | service: lifecycle, IPC, shortcuts, privacy screen (+ `windows.rs` / `linux.rs`) |
 | `src/monitor.rs` | monitoring loop, identity cache, workflow engine, enrollment |
-| `src/engine.rs` | YuNet + SFace (pre/post-processing identical to OpenCV) |
+| `src/engine.rs` | YuNet + SFace + NanoDet (pre/post-processing identical to OpenCV) |
+| `src/presence.rs` | hidden-face logic: silhouette tracking, "is it me?" |
 | `src/camera/` | Media Foundation (Windows), V4L2 (Linux) |
 | `src/actions/` | action catalog + per-system implementations |
 | `src/ui/` | interface: glass theme, workflow editor, privacy screen |
@@ -112,4 +114,4 @@ Commits follow [Conventional Commits](https://www.conventionalcommits.org/): see
 
 ## 📄 License
 
-MIT, see [LICENSE](LICENSE). [YuNet](https://github.com/opencv/opencv_zoo/tree/main/models/face_detection_yunet) (MIT) and [SFace](https://github.com/opencv/opencv_zoo/tree/main/models/face_recognition_sface) (Apache 2.0) models from opencv_zoo; [Phosphor](https://phosphoricons.com/) icons (MIT).
+MIT, see [LICENSE](LICENSE). [YuNet](https://github.com/opencv/opencv_zoo/tree/main/models/face_detection_yunet) (MIT), [SFace](https://github.com/opencv/opencv_zoo/tree/main/models/face_recognition_sface) (Apache 2.0) and [NanoDet](https://github.com/opencv/opencv_zoo/tree/main/models/object_detection_nanodet) (Apache 2.0) models from opencv_zoo; [Phosphor](https://phosphoricons.com/) icons (MIT).
